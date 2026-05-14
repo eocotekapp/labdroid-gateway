@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 # ============================================================
 # LabDroid Gateway
 # Android Lab Edge Controller
@@ -25,40 +28,57 @@ UPLOAD_WEB_URL="https://thong-url-1.onrender.com"
 SCAN_CONCURRENCY=64
 ADB_CONCURRENCY=24
 VIDEO_SCAN_CONCURRENCY=12
-PUSH_CONCURRENCY=3
 
 mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
 touch "$DEVICE_FILE" "$NAME_FILE"
 
-RED="\033[31m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-BLUE="\033[34m"
-CYAN="\033[36m"
-MAGENTA="\033[35m"
-WHITE="\033[37m"
-RESET="\033[0m"
-BOLD="\033[1m"
+ESC=$'\033'
+RESET="${ESC}[0m"
+BOLD="${ESC}[1m"
+DIM="${ESC}[2m"
+BLINK="${ESC}[5m"
 
-pause() {
-  echo
-  read -rp "Nhấn Enter để tiếp tục..."
-}
+RED="${ESC}[31m"
+GREEN="${ESC}[32m"
+YELLOW="${ESC}[33m"
+BLUE="${ESC}[34m"
+MAGENTA="${ESC}[35m"
+CYAN="${ESC}[36m"
+WHITE="${ESC}[37m"
 
-line() {
-  echo -e "${MAGENTA}════════════════════════════════════════════════════════════${RESET}"
-}
+BRIGHT_RED="${ESC}[91m"
+BRIGHT_GREEN="${ESC}[92m"
+BRIGHT_YELLOW="${ESC}[93m"
+BRIGHT_BLUE="${ESC}[94m"
+BRIGHT_MAGENTA="${ESC}[95m"
+BRIGHT_CYAN="${ESC}[96m"
+BRIGHT_WHITE="${ESC}[97m"
 
-banner() {
-  clear
-  echo -e "${MAGENTA}════════════════════════════════════════════════════════════${RESET}"
-  echo -e "   ${GREEN}LabDroid${RESET} ${MAGENTA}Gateway${RESET} ${CYAN}- Android Lab Edge Controller${RESET}"
-  echo -e "   ${YELLOW}ADB Wi-Fi fixed port:${RESET} ${GREEN}${ADB_PORT}${RESET}"
-  echo -e "${BLUE}════════════════════════════════════════════════════════════${RESET}"
+COLORS=(
+  "$BRIGHT_RED"
+  "$BRIGHT_YELLOW"
+  "$BRIGHT_GREEN"
+  "$BRIGHT_CYAN"
+  "$BRIGHT_BLUE"
+  "$BRIGHT_MAGENTA"
+)
+
+pause_enter() {
+  echo ""
+  printf "%bNhấn Enter để tiếp tục...%b" "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r _
 }
 
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+need_cmd_soft() {
+  if ! has_cmd "$1"; then
+    printf "%bThiếu lệnh:%b %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$1"
+    return 1
+  fi
+  return 0
 }
 
 detect_env() {
@@ -78,7 +98,7 @@ detect_env() {
 auto_install_missing() {
   local missing=""
 
-  for c in bash adb timeout awk grep sed sort wc seq; do
+  for c in bash adb timeout awk grep sed sort wc seq curl; do
     if ! has_cmd "$c"; then
       missing="$missing $c"
     fi
@@ -88,10 +108,11 @@ auto_install_missing() {
     return
   fi
 
-  banner
-  echo -e "${YELLOW}Thiếu addon:${RESET}$missing"
-  echo -e "${YELLOW}Đang thử tự cài addon cần thiết...${RESET}"
-  echo
+  clear
+  ui_line
+  ui_warn "Thiếu addon:$missing"
+  ui_warn "Đang thử tự cài addon cần thiết..."
+  echo ""
 
   env_type="$(detect_env)"
 
@@ -110,15 +131,63 @@ auto_install_missing() {
       apt install -y bash android-tools-adb coreutils grep gawk sed curl wget iproute2 nano
       ;;
     *)
-      echo -e "${RED}Không tự cài được vì không nhận diện được hệ thống.${RESET}"
+      ui_err "Không tự cài được vì không nhận diện được hệ thống."
       echo "Hãy đảm bảo môi trường có: bash, adb, timeout, awk, grep, sed, curl/wget."
-      pause
+      pause_enter
       ;;
   esac
 }
 
-safe_filename() {
-  echo "$1" | sed 's#[/\\:*?"<>|]#_#g'
+rand_color() {
+  local idx=$((RANDOM % ${#COLORS[@]}))
+  printf "%b" "${COLORS[$idx]}"
+}
+
+gradient_text() {
+  local text="$1"
+  local i char idx total
+  total=${#COLORS[@]}
+  for ((i=0; i<${#text}; i++)); do
+    char="${text:$i:1}"
+    idx=$((i % total))
+    printf "%b%s%b" "${COLORS[$idx]}$BOLD" "$char" "$RESET"
+  done
+}
+
+ui_line() {
+  local color
+  color=$(rand_color)
+  printf "%b=======================================================%b\n" "$color$BOLD" "$RESET"
+}
+
+ui_ok() {
+  printf "%b%s%b\n" "$BRIGHT_GREEN$BOLD" "$1" "$RESET"
+}
+
+ui_warn() {
+  printf "%b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$1" "$RESET"
+}
+
+ui_err() {
+  printf "%b%s%b\n" "$BRIGHT_RED$BOLD" "$1" "$RESET"
+}
+
+ui_info() {
+  printf "%b%s%b\n" "$BRIGHT_CYAN$BOLD" "$1" "$RESET"
+}
+
+ui_dim() {
+  printf "%b%s%b\n" "$DIM$BRIGHT_WHITE" "$1" "$RESET"
+}
+
+ui_title() {
+  clear
+  ui_line
+  printf "   "
+  gradient_text "LabDroid Gateway - Android Lab Edge Controller"
+  printf "\n"
+  printf "   %bADB Wi-Fi fixed port:%b %b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
+  ui_line
 }
 
 normalize_serial() {
@@ -134,31 +203,16 @@ normalize_serial() {
   echo "$ip_only:$ADB_PORT"
 }
 
-check_adb_port_5555() {
-  local ip="$1"
-  timeout 1 bash -c "echo >/dev/tcp/$ip/$ADB_PORT" >/dev/null 2>&1
+safe_filename() {
+  echo "$1" | sed 's#[/\\:*?"<>|]#_#g'
 }
 
-adb_connected_devices() {
-  $ADB_BIN devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1}' | grep ":$ADB_PORT$" || true
-}
-
-adb_connected_count() {
-  adb_connected_devices | wc -l | tr -d ' '
-}
-
-get_name() {
-  local serial="$1"
-  grep "|$serial$" "$NAME_FILE" 2>/dev/null | head -n1 | cut -d'|' -f1
-}
-
-display_device() {
+get_name_by_ip() {
   local serial="$1"
   local name
-  name="$(get_name "$serial")"
-
+  name=$(grep -F "|$serial" "$NAME_FILE" 2>/dev/null | head -n 1 | cut -d'|' -f1)
   if [ -n "$name" ]; then
-    echo "$name | $serial"
+    echo "$name"
   else
     echo "$serial"
   fi
@@ -166,113 +220,191 @@ display_device() {
 
 save_device() {
   local serial="$1"
+  serial="$(normalize_serial "$serial")"
+  [ -z "$serial" ] && return
 
-  if echo "$serial" | grep -q ":$ADB_PORT$"; then
-    echo "$serial" >> "$DEVICE_FILE"
-    sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
+  echo "$serial" >> "$DEVICE_FILE"
+  sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
+}
+
+adb_start_clean() {
+  $ADB_BIN start-server >/dev/null 2>&1
+}
+
+list_connected_devices_raw() {
+  $ADB_BIN devices 2>/dev/null | awk -v p=":$ADB_PORT" 'NR>1 && $2=="device" && $1 ~ p"$" {print $1}' | sort -u
+}
+
+connected_count() {
+  list_connected_devices_raw | wc -l | tr -d ' '
+}
+
+check_adb_port_5555() {
+  local ip="$1"
+  timeout 1 bash -c "echo >/dev/tcp/$ip/$ADB_PORT" >/dev/null 2>&1
+}
+
+list_connected_devices_named() {
+  local devices
+  local i
+  local dev
+  local name
+  local brand
+  local model
+  local battery
+
+  devices=$(list_connected_devices_raw)
+
+  if [ -z "$devices" ]; then
+    ui_warn "Không có thiết bị nào đang connect port $ADB_PORT."
+    return
   fi
+
+  i=1
+  while IFS= read -r dev; do
+    [ -z "$dev" ] && continue
+    name=$(get_name_by_ip "$dev")
+    brand="$($ADB_BIN -s "$dev" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
+    model="$($ADB_BIN -s "$dev" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+    battery="$($ADB_BIN -s "$dev" shell dumpsys battery 2>/dev/null | awk -F': ' '/level/ {print $2; exit}' | tr -d '\r')"
+
+    printf "%b%s)%b %b%s%b %b(%s)%b | %s %s | Pin: %s%%\n" \
+      "$BRIGHT_WHITE$BOLD" "$i" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$name" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET" \
+      "${brand:-?}" "${model:-?}" "${battery:-?}"
+
+    i=$((i + 1))
+  done <<EOF
+$devices
+EOF
+}
+
+choose_devices() {
+  local devices
+  local line
+  local i
+  local choice
+  local idx
+  local dev
+  local name
+
+  devices=$(list_connected_devices_raw)
+
+  if [ -z "$devices" ]; then
+    ui_err "Không có thiết bị nào đang connect port $ADB_PORT."
+    return 1
+  fi
+
+  DEV_ARR=()
+
+  while IFS= read -r line; do
+    [ -n "$line" ] && DEV_ARR+=("$line")
+  done <<EOF
+$devices
+EOF
+
+  echo ""
+  ui_line
+  ui_info "Danh sách thiết bị đang connect:"
+  echo ""
+
+  i=1
+  for dev in "${DEV_ARR[@]}"; do
+    [ -z "$dev" ] && continue
+    name=$(get_name_by_ip "$dev")
+    printf "%b%s)%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$i" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$name" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+    i=$((i + 1))
+  done
+
+  echo ""
+  ui_dim "Cách chọn:"
+  printf "%ball%b    -> chọn tất cả\n" "$BRIGHT_CYAN$BOLD" "$RESET"
+  printf "%b1%b      -> chọn máy số 1\n" "$BRIGHT_CYAN$BOLD" "$RESET"
+  printf "%b1 2 5%b  -> chọn nhiều máy theo số\n" "$BRIGHT_CYAN$BOLD" "$RESET"
+  echo ""
+  printf "%bChọn thiết bị:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r choice
+
+  SELECTED_DEVICES=()
+
+  if [ -z "$choice" ] || [ "$choice" = "all" ] || [ "$choice" = "a" ] || [ "$choice" = "tatca" ]; then
+    for dev in "${DEV_ARR[@]}"; do
+      [ -n "$dev" ] && SELECTED_DEVICES+=("$dev")
+    done
+  else
+    for idx in $choice; do
+      case "$idx" in
+        ''|*[!0-9]*)
+          ;;
+        *)
+          if [ "$idx" -ge 1 ] && [ "$idx" -le "${#DEV_ARR[@]}" ]; then
+            SELECTED_DEVICES+=("${DEV_ARR[$((idx - 1))]}")
+          fi
+          ;;
+      esac
+    done
+  fi
+
+  if [ "${#SELECTED_DEVICES[@]}" -eq 0 ]; then
+    ui_err "Chưa chọn thiết bị hợp lệ."
+    return 1
+  fi
+
+  return 0
 }
 
 adb_connect_twice() {
   local serial="$1"
   serial="$(normalize_serial "$serial")"
 
-  if [ -z "$serial" ]; then
-    echo -e "${RED}Serial/IP trống.${RESET}"
-    return 1
-  fi
+  [ -z "$serial" ] && return 1
 
   $ADB_BIN connect "$serial" >/dev/null 2>&1
   sleep 1
   $ADB_BIN connect "$serial" >/dev/null 2>&1
 
   if $ADB_BIN devices | grep -q "^$serial[[:space:]]*device$"; then
-    echo -e "${GREEN}OK   $serial${RESET}"
+    ui_ok "OK   $serial"
     save_device "$serial"
     return 0
   else
-    echo -e "${RED}FAIL $serial${RESET}"
+    ui_err "FAIL $serial"
     return 1
   fi
 }
 
-print_connected_devices_for_select() {
-  local devices_file="$1"
-  local idx=1
+scan_and_connect_subnet() {
+  local subnets
+  local subnet
+  local i
+  local ip
+  local serial
 
-  echo >&2
-  echo -e "${CYAN}Danh sách thiết bị đang connect:${RESET}" >&2
-  echo >&2
-
-  while read -r serial; do
-    [ -z "$serial" ] && continue
-    echo "$idx) $(display_device "$serial")" >&2
-    idx=$((idx + 1))
-  done < "$devices_file"
-
-  echo >&2
-  echo -e "${YELLOW}Cách chọn:${RESET}" >&2
-  echo "  - Chọn 1 máy      : 1" >&2
-  echo "  - Chọn nhiều máy  : 1 2 5" >&2
-  echo "  - Chọn tất cả     : all" >&2
-  echo >&2
-}
-
-select_devices() {
-  local devices_file="$TMP_DIR/select_devices.txt"
-  local out_file="$TMP_DIR/selected_devices.txt"
-
-  adb_connected_devices > "$devices_file"
-
-  if [ ! -s "$devices_file" ]; then
-    echo -e "${RED}Không có thiết bị nào đang connect port $ADB_PORT.${RESET}" >&2
-    echo -e "${YELLOW}Hãy vào mục scan/connect trước rồi thử lại.${RESET}" >&2
-    echo ""
-    return
-  fi
-
-  print_connected_devices_for_select "$devices_file"
-
-  read -rp "Chọn thiết bị: " choice >&2
-
-  if [ -z "$choice" ] || echo "$choice" | grep -Eiq '^(all|a|tatca|tat ca|tất cả)$'; then
-    cat "$devices_file"
-    return
-  fi
-
-  > "$out_file"
-
-  for n in $choice; do
-    if echo "$n" | grep -Eq '^[0-9]+$'; then
-      sed -n "${n}p" "$devices_file" >> "$out_file"
-    fi
-  done
-
-  sort -u "$out_file" | grep -v '^$' || true
-}
-
-scan_subnets_5555() {
-  banner
-  echo -e "${CYAN}Scan Android ADB Wi-Fi port $ADB_PORT cố định${RESET}"
-  line
-  echo -e "${YELLOW}Ví dụ nhập:${RESET}"
+  ui_title
+  ui_info "Scan subnet và connect thiết bị Android lab port $ADB_PORT"
+  ui_line
+  echo "Ví dụ:"
   echo "10.48.154"
   echo "10.48.154 10.48.155"
   echo "192.168.1"
-  echo
-  read -rp "Nhập subnet cần scan: " subnets
+  echo ""
+  printf "%bNhập subnet:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r subnets
 
   if [ -z "$subnets" ]; then
-    echo -e "${RED}Bạn chưa nhập subnet.${RESET}"
-    pause
+    ui_err "Chưa nhập subnet."
     return
   fi
 
-  > "$DEVICE_FILE"
+  : > "$DEVICE_FILE"
 
-  echo
-  echo -e "${YELLOW}Đang scan port $ADB_PORT...${RESET}"
-  echo
+  echo ""
+  ui_info "Đang scan port $ADB_PORT và connect 2 lần..."
+  echo ""
 
   for subnet in $subnets; do
     for i in $(seq 1 254); do
@@ -282,65 +414,16 @@ scan_subnets_5555() {
         if check_adb_port_5555 "$ip"; then
           serial="$ip:$ADB_PORT"
           echo "$serial" >> "$DEVICE_FILE"
-          echo -e "${GREEN}OPEN $serial${RESET}"
-        fi
-      ) &
-
-      while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$SCAN_CONCURRENCY" ]; do
-        sleep 0.02
-      done
-    done
-  done
-
-  wait
-  sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
-
-  echo
-  echo -e "${GREEN}Tìm thấy $(wc -l < "$DEVICE_FILE" | tr -d ' ') thiết bị mở port $ADB_PORT.${RESET}"
-  pause
-}
-
-scan_and_connect_subnets_5555() {
-  banner
-  echo -e "${CYAN}Scan + connect Android ADB port $ADB_PORT cố định${RESET}"
-  line
-  echo -e "${YELLOW}Ví dụ nhập:${RESET}"
-  echo "10.48.154"
-  echo "10.48.154 10.48.155"
-  echo "192.168.1"
-  echo
-  read -rp "Nhập subnet cần scan + connect: " subnets
-
-  if [ -z "$subnets" ]; then
-    echo -e "${RED}Bạn chưa nhập subnet.${RESET}"
-    pause
-    return
-  fi
-
-  > "$DEVICE_FILE"
-
-  echo
-  echo -e "${YELLOW}Đang scan port $ADB_PORT và adb connect 2 lần...${RESET}"
-  echo
-
-  for subnet in $subnets; do
-    for i in $(seq 1 254); do
-      ip="$subnet.$i"
-
-      (
-        if check_adb_port_5555 "$ip"; then
-          serial="$ip:$ADB_PORT"
-          echo "$serial" >> "$DEVICE_FILE"
-          echo -e "${GREEN}OPEN $serial${RESET}"
+          printf "%bOPEN%b %s\n" "$BRIGHT_GREEN$BOLD" "$RESET" "$serial"
 
           $ADB_BIN connect "$serial" >/dev/null 2>&1
           sleep 1
           $ADB_BIN connect "$serial" >/dev/null 2>&1
 
           if $ADB_BIN devices | grep -q "^$serial[[:space:]]*device$"; then
-            echo -e "${CYAN}OK   $serial${RESET}"
+            printf "%bOK%b   %s\n" "$BRIGHT_CYAN$BOLD" "$RESET" "$serial"
           else
-            echo -e "${RED}FAIL $serial${RESET}"
+            printf "%bFAIL%b %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$serial"
           fi
         fi
       ) &
@@ -354,22 +437,16 @@ scan_and_connect_subnets_5555() {
   wait
   sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
 
-  echo
-  echo -e "${CYAN}Thiết bị đã connect:${RESET}"
-  adb_connected_devices | while read -r serial; do
-    echo "$(display_device "$serial")"
-  done
-  echo
-  echo -e "${GREEN}Tổng connected: $(adb_connected_count)${RESET}"
-  pause
+  echo ""
+  ui_ok "Tổng connected: $(connected_count)"
 }
 
 quick_scan_154_155() {
-  banner
-  echo -e "${CYAN}Scan nhanh 10.48.154.xxx + 10.48.155.xxx port $ADB_PORT${RESET}"
-  line
+  ui_title
+  ui_info "Scan nhanh 10.48.154.xxx + 10.48.155.xxx port $ADB_PORT"
+  ui_line
 
-  > "$DEVICE_FILE"
+  : > "$DEVICE_FILE"
 
   for subnet in 154 155; do
     for i in $(seq 1 254); do
@@ -379,14 +456,14 @@ quick_scan_154_155() {
         if check_adb_port_5555 "$ip"; then
           serial="$ip:$ADB_PORT"
           echo "$serial" >> "$DEVICE_FILE"
-          echo -e "${GREEN}OPEN $serial${RESET}"
+          printf "%bOPEN%b %s\n" "$BRIGHT_GREEN$BOLD" "$RESET" "$serial"
 
           $ADB_BIN connect "$serial" >/dev/null 2>&1
           sleep 1
           $ADB_BIN connect "$serial" >/dev/null 2>&1
 
           if $ADB_BIN devices | grep -q "^$serial[[:space:]]*device$"; then
-            echo -e "${CYAN}OK   $serial${RESET}"
+            printf "%bOK%b   %s\n" "$BRIGHT_CYAN$BOLD" "$RESET" "$serial"
           fi
         fi
       ) &
@@ -396,61 +473,65 @@ quick_scan_154_155() {
   wait
   sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
 
-  echo
-  echo -e "${GREEN}Tổng connected: $(adb_connected_count)${RESET}"
-  pause
+  echo ""
+  ui_ok "Tổng connected: $(connected_count)"
 }
 
-connect_manual_5555() {
-  banner
-  echo -e "${CYAN}Connect IP thủ công - chỉ port $ADB_PORT${RESET}"
-  line
+connect_manual() {
+  local ips
+  local ip
+  local serial
+
+  adb_start_clean
+
+  ui_title
+  ui_info "Connect IP thủ công - chỉ port $ADB_PORT"
+  ui_line
   echo "Ví dụ:"
   echo "10.48.154.116"
   echo "10.48.154.116 10.48.154.117"
-  echo
-  read -rp "Nhập IP thiết bị Android lab: " ips
+  echo ""
+  printf "%bIP cần connect:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r ips
 
   if [ -z "$ips" ]; then
-    echo -e "${RED}Chưa nhập IP.${RESET}"
-    pause
+    ui_err "Chưa nhập IP."
     return
   fi
 
   for ip in $ips; do
     serial="$(normalize_serial "$ip")"
-
-    (
-      adb_connect_twice "$serial"
-    ) &
-
+    adb_connect_twice "$serial" &
     while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$ADB_CONCURRENCY" ]; do
       sleep 0.03
     done
   done
 
   wait
-  pause
+
+  echo ""
+  ui_ok "Thiết bị đang connect:"
+  list_connected_devices_named
 }
 
 connect_saved_devices() {
-  banner
+  local serial
+
+  ui_title
 
   if [ ! -s "$DEVICE_FILE" ]; then
-    echo -e "${RED}Chưa có danh sách thiết bị đã scan.${RESET}"
-    pause
+    ui_err "Chưa có danh sách thiết bị đã scan."
     return
   fi
 
-  echo -e "${YELLOW}Đang connect lại danh sách đã scan port $ADB_PORT...${RESET}"
-  echo
+  ui_info "Đang connect lại danh sách đã scan port $ADB_PORT..."
+  echo ""
 
-  while read -r serial; do
+  while IFS= read -r serial; do
+    [ -z "$serial" ] && continue
     serial="$(normalize_serial "$serial")"
 
-    (
-      adb_connect_twice "$serial"
-    ) &
+    adb_connect_twice "$serial" &
 
     while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$ADB_CONCURRENCY" ]; do
       sleep 0.03
@@ -459,99 +540,110 @@ connect_saved_devices() {
 
   wait
 
-  echo
-  echo -e "${GREEN}Tổng connected: $(adb_connected_count)${RESET}"
-  pause
+  echo ""
+  ui_ok "Tổng connected: $(connected_count)"
 }
 
-list_adb_devices() {
-  banner
-  echo -e "${CYAN}Thiết bị Android lab đang connect:${RESET}"
-  line
+adb_push_with_progress() {
+  local serial="$1"
+  local src="$2"
+  adb -s "$serial" push "$src" /sdcard/Download/
+}
 
-  local idx=1
+adb_pull_with_progress() {
+  local serial="$1"
+  local src="$2"
+  local dst="$3"
+  adb -s "$serial" pull "$src" "$dst"
+}
 
-  adb_connected_devices | while read -r serial; do
-    model="$($ADB_BIN -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    brand="$($ADB_BIN -s "$serial" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
-    battery="$($ADB_BIN -s "$serial" shell dumpsys battery 2>/dev/null | awk -F': ' '/level/ {print $2; exit}' | tr -d '\r')"
-    echo "$idx) $(display_device "$serial") | ${brand:-?} ${model:-?} | Pin: ${battery:-?}%"
-    idx=$((idx + 1))
+push_file_to_selected_devices() {
+  local src="$1"
+  local name="$2"
+  local dev
+  local devname
+  local ok=0
+  local fail=0
+
+  if [ ! -f "$src" ]; then
+    ui_err "Không thấy file: $src"
+    return 1
+  fi
+
+  choose_devices || return 1
+
+  echo ""
+  ui_info "Đang push: $name"
+  ui_dim "Kiểu push: adb -s SERIAL push FILE /sdcard/Download/"
+  echo ""
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    devname=$(get_name_by_ip "$dev")
+
+    printf "%b→%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$devname" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+
+    adb_push_with_progress "$dev" "$src"
+
+    if [ $? -eq 0 ]; then
+      ui_ok "   OK"
+      ok=$((ok + 1))
+    else
+      ui_err "   FAIL"
+      fail=$((fail + 1))
+    fi
+
+    echo ""
   done
 
-  echo
-  echo -e "${GREEN}Tổng connected: $(adb_connected_count)${RESET}"
-  pause
+  ui_info "Kết quả push: OK=$ok | FAIL=$fail"
 }
 
-batch_push_file() {
-  banner
-  echo -e "${CYAN}Đẩy file/video lên thiết bị Android lab${RESET}"
-  line
+push_local_file_menu() {
+  local last
+  local file
+  local name
+
+  ui_title
+  ui_info "Push file/video lên thiết bị"
+  ui_line
 
   if [ -f "$LAST_FILE" ]; then
-    last_path="$(cat "$LAST_FILE")"
-    echo -e "${YELLOW}File lần trước:${RESET} $last_path"
-    read -rp "Enter để dùng lại, hoặc nhập file mới: " file
-    [ -z "$file" ] && file="$last_path"
-  else
-    read -rp "Nhập đường dẫn file/video trên máy gateway: " file
+    last="$(cat "$LAST_FILE")"
+    ui_dim "File lần trước: $last"
+  fi
+
+  echo "Ví dụ:"
+  echo "/storage/emulated/0/Download/vario.mp4"
+  echo "/sdcard/Download/vario.mp4"
+  echo ""
+  printf "%bĐường dẫn file/video:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r file
+
+  if [ -z "$file" ] && [ -n "$last" ]; then
+    file="$last"
   fi
 
   if [ ! -f "$file" ]; then
-    echo -e "${RED}Không thấy file:${RESET} $file"
-    pause
+    ui_err "Không tìm thấy file: $file"
     return
   fi
 
   echo "$file" > "$LAST_FILE"
+  name="$(basename "$file")"
 
-  targets="$(select_devices)"
-
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  filename="$(basename "$file")"
-  remote="/sdcard/Download/$filename"
-
-  echo
-  echo -e "${YELLOW}File nguồn:${RESET} $file"
-  echo -e "${YELLOW}Đường dẫn đích:${RESET} $remote"
-  echo
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
-      $ADB_BIN -s "$serial" push "$file" "$remote"
-
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
-      else
-        echo -e "${RED}PUSH FAIL → $(display_device "$serial")${RESET}"
-      fi
-    ) &
-
-    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
-      sleep 0.2
-    done
-  done
-
-  wait
-  pause
+  push_file_to_selected_devices "$file" "$name"
 }
 
-get_remote_videos() {
-  local serial="$1"
+list_videos_on_device() {
+  local dev="$1"
 
-  $ADB_BIN -s "$serial" shell 'ls -1 /sdcard/Download 2>/dev/null' | \
-    tr -d '\r' | \
-    grep -Ei '\.(mp4|mkv|avi|mov|m4v|3gp|webm)$' | \
-    sort -u
+  adb -s "$dev" shell "ls -1 /sdcard/Download 2>/dev/null" \
+    | tr -d '\r' \
+    | grep -Ei '\.(mp4|mkv|avi|mov|m4v|3gp|webm)$' \
+    | sort -u
 }
 
 build_all_video_list() {
@@ -560,33 +652,37 @@ build_all_video_list() {
   local list_file="$TMP_DIR/all_videos_list.txt"
   local count_file="$TMP_DIR/all_video_count.txt"
   local device_file="$TMP_DIR/video_devices.txt"
+  local count
+  local serial
+  local tmp_each
+  local v
+  local idx
+  local have_count
 
-  > "$vote_file"
-  > "$map_file"
-  > "$list_file"
-  > "$count_file"
-  > "$device_file"
+  : > "$vote_file"
+  : > "$map_file"
+  : > "$list_file"
+  : > "$count_file"
+  : > "$device_file"
 
-  adb_connected_devices > "$device_file"
+  list_connected_devices_raw > "$device_file"
 
   if [ ! -s "$device_file" ]; then
-    echo -e "${RED}Chưa có thiết bị ADB connected port $ADB_PORT.${RESET}" >&2
-    echo -e "${YELLOW}Hãy scan/connect trước rồi thử lại.${RESET}" >&2
+    ui_err "Chưa có thiết bị ADB connected port $ADB_PORT."
     return 1
   fi
 
-  local count
   count="$(wc -l < "$device_file" | tr -d ' ')"
 
-  echo >&2
-  echo -e "${YELLOW}Đang quét toàn bộ video trong /sdcard/Download trên $count thiết bị...${RESET}" >&2
-  echo >&2
+  echo ""
+  ui_info "Đang quét toàn bộ video trong /sdcard/Download trên $count thiết bị..."
+  echo ""
 
   while read -r serial; do
     (
       tmp_each="$TMP_DIR/videos_${serial//[:.]/_}.txt"
 
-      get_remote_videos "$serial" > "$tmp_each"
+      list_videos_on_device "$serial" > "$tmp_each"
 
       if [ -s "$tmp_each" ]; then
         while read -r v; do
@@ -595,9 +691,14 @@ build_all_video_list() {
           echo "$v|$serial" >> "$map_file"
         done < "$tmp_each"
 
-        echo -e "${GREEN}DONE → $(display_device "$serial") | $(wc -l < "$tmp_each" | tr -d ' ') video${RESET}" >&2
+        printf "%bDONE%b → %s | %s video\n" \
+          "$BRIGHT_GREEN$BOLD" "$RESET" \
+          "$(get_name_by_ip "$serial")" \
+          "$(wc -l < "$tmp_each" | tr -d ' ')"
       else
-        echo -e "${YELLOW}EMPTY → $(display_device "$serial") | không thấy video${RESET}" >&2
+        printf "%bEMPTY%b → %s | không thấy video\n" \
+          "$BRIGHT_YELLOW$BOLD" "$RESET" \
+          "$(get_name_by_ip "$serial")"
       fi
     ) &
 
@@ -609,24 +710,27 @@ build_all_video_list() {
   wait
 
   if [ ! -s "$vote_file" ]; then
-    echo >&2
-    echo -e "${RED}Không tìm thấy video nào trong /sdcard/Download.${RESET}" >&2
+    echo ""
+    ui_err "Không tìm thấy video nào trong /sdcard/Download."
     return 1
   fi
 
   sort "$vote_file" | uniq -c | sort -nr > "$count_file"
   awk '{$1=""; sub(/^ /,""); print}' "$count_file" > "$list_file"
 
-  echo >&2
-  echo -e "${CYAN}Danh sách video tìm thấy:${RESET}" >&2
-  echo >&2
+  echo ""
+  ui_line
+  ui_info "Danh sách video tìm thấy:"
+  echo ""
 
-  local idx=1
-
-  while read -r video; do
-    [ -z "$video" ] && continue
-    have_count="$(grep -Fx "$video" "$vote_file" | wc -l | tr -d ' ')"
-    echo "$idx) [$have_count/$count máy có] $video" >&2
+  idx=1
+  while read -r v; do
+    [ -z "$v" ] && continue
+    have_count="$(grep -Fx "$v" "$vote_file" | wc -l | tr -d ' ')"
+    printf "%b%s)%b %b%s%b %b[%s/%s máy có]%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$idx" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$v" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$have_count" "$count" "$RESET"
     idx=$((idx + 1))
   done < "$list_file"
 
@@ -634,224 +738,490 @@ build_all_video_list() {
 }
 
 choose_video_from_lab() {
+  local n
+  local video
+
   build_all_video_list || return 1
 
-  echo >&2
-  echo -e "${YELLOW}Cách chọn:${RESET} nhập số thứ tự video, ví dụ 1 hoặc 2" >&2
-  read -rp "Chọn video số: " n >&2
+  echo ""
+  printf "%bChọn video số:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r n
 
-  if ! echo "$n" | grep -Eq '^[0-9]+$'; then
-    echo -e "${RED}Lựa chọn không hợp lệ.${RESET}" >&2
-    return 1
-  fi
+  case "$n" in
+    ''|*[!0-9]*)
+      ui_err "Lựa chọn không hợp lệ."
+      return 1
+      ;;
+  esac
 
-  local video
   video="$(sed -n "${n}p" "$TMP_DIR/all_videos_list.txt")"
 
   if [ -z "$video" ]; then
-    echo -e "${RED}Không có video ở số thứ tự này.${RESET}" >&2
+    ui_err "Không có video ở số thứ tự này."
     return 1
   fi
 
-  printf "%s\n" "$video"
+  VIDEO_SELECTED="$video"
+  return 0
 }
 
 find_source_device_from_map() {
   local video="$1"
   local map_file="$TMP_DIR/video_map.txt"
-
   awk -F'|' -v v="$video" '$1 == v {print $2; exit}' "$map_file"
 }
 
-feature_open_lab_video() {
-  banner
-  echo -e "${CYAN}Liệt kê video trong lab rồi chọn mở${RESET}"
-  line
+open_lab_video_menu() {
+  local video
+  local dev
 
-  video="$(choose_video_from_lab)" || {
-    pause
-    return
-  }
+  ui_title
+  ui_info "Liệt kê video trong lab rồi chọn mở"
+  ui_line
 
-  echo
-  echo -e "${GREEN}Video đã chọn:${RESET} $video"
+  choose_video_from_lab || return
+  video="$VIDEO_SELECTED"
 
-  targets="$(select_devices)"
+  echo ""
+  ui_ok "Video đã chọn: $video"
 
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
+  choose_devices || return
 
-  echo
-  echo -e "${YELLOW}Đang mở video trên thiết bị đã chọn...${RESET}"
-  echo
+  echo ""
+  ui_info "Đang mở video trên thiết bị đã chọn..."
+  echo ""
 
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
 
-    (
-      $ADB_BIN -s "$serial" shell am start \
-        -a android.intent.action.VIEW \
-        -d "file:///sdcard/Download/$video" \
-        -t "video/*" >/dev/null 2>&1
+    adb -s "$dev" shell am start \
+      -a android.intent.action.VIEW \
+      -d "file:///sdcard/Download/$video" \
+      -t "video/*" >/dev/null 2>&1
 
-      echo -e "${GREEN}MỞ VIDEO → $(display_device "$serial")${RESET}"
-    ) &
+    if [ $? -eq 0 ]; then
+      ui_ok "   OK"
+    else
+      ui_err "   FAIL"
+    fi
+
+    echo ""
   done
-
-  wait
-  pause
 }
 
-feature_sync_lab_video() {
-  banner
-  echo -e "${CYAN}Liệt kê video trong lab rồi đồng bộ/push sang thiết bị đã chọn${RESET}"
-  line
+sync_lab_video_menu() {
+  local video
+  local source_dev
+  local local_file
+  local dev
+  local skip_have
+  local play_now
 
-  video="$(choose_video_from_lab)" || {
-    pause
-    return
-  }
+  ui_title
+  ui_info "Liệt kê video trong lab rồi chọn đồng bộ/push"
+  ui_line
 
-  echo
-  echo -e "${GREEN}Video đã chọn:${RESET} $video"
+  choose_video_from_lab || return
+  video="$VIDEO_SELECTED"
 
-  source_serial="$(find_source_device_from_map "$video")"
+  echo ""
+  ui_ok "Video đã chọn: $video"
 
-  if [ -z "$source_serial" ]; then
-    echo -e "${RED}Không tìm được máy nguồn trong dữ liệu đã quét.${RESET}"
-    pause
+  source_dev="$(find_source_device_from_map "$video")"
+
+  if [ -z "$source_dev" ]; then
+    ui_err "Không tìm được máy nguồn trong dữ liệu đã quét."
     return
   fi
 
-  echo -e "${CYAN}Máy nguồn:${RESET} $(display_device "$source_serial")"
+  ui_info "Máy nguồn: $(get_name_by_ip "$source_dev") ($source_dev)"
 
-  local_name="$(safe_filename "$video")"
-  local_file="$CACHE_DIR/$local_name"
+  local_file="$CACHE_DIR/$video"
 
   if [ -f "$local_file" ]; then
-    echo -e "${GREEN}Cache đã có:${RESET} $local_file"
+    ui_warn "Dùng file cache: $local_file"
   else
-    echo
-    echo -e "${YELLOW}Đang pull video từ máy nguồn về cache...${RESET}"
-    echo -e "${YELLOW}Nguồn:${RESET} $source_serial:/sdcard/Download/$video"
-    echo -e "${YELLOW}Cache:${RESET} $local_file"
-    echo
+    echo ""
+    ui_info "Đang pull từ máy nguồn về cache..."
+    ui_dim "$source_dev:/sdcard/Download/$video"
+    ui_dim "$local_file"
+    echo ""
 
-    $ADB_BIN -s "$source_serial" pull "/sdcard/Download/$video" "$local_file"
+    adb_pull_with_progress "$source_dev" "/sdcard/Download/$video" "$local_file"
 
     if [ $? -ne 0 ] || [ ! -f "$local_file" ]; then
-      echo -e "${RED}Pull thất bại.${RESET}"
-      echo -e "${YELLOW}Thử kiểm tra thủ công:${RESET}"
-      echo "adb -s $source_serial shell ls -l /sdcard/Download"
-      pause
+      ui_err "Pull thất bại."
       return
     fi
   fi
 
-  echo
-  echo -e "${CYAN}Bây giờ chọn thiết bị đích để push video sang.${RESET}"
+  echo ""
+  ui_info "Bây giờ chọn thiết bị đích để push video sang."
+  choose_devices || return
 
-  targets="$(select_devices)"
+  echo ""
+  printf "%bBỏ qua máy đã có video này? [Y/n]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r skip_have
+  [ -z "$skip_have" ] && skip_have="Y"
 
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
+  printf "%bPush xong có phát luôn không? [y/N]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r play_now
+
+  echo ""
+  ui_info "Đang push video sang thiết bị đã chọn..."
+  ui_dim "Kiểu push: adb -s SERIAL push FILE /sdcard/Download/"
+  echo ""
+
+  ok=0
+  fail=0
+  skip=0
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+
+    if echo "$skip_have" | grep -qi '^y'; then
+      if adb -s "$dev" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1; then
+        ui_warn "   SKIP đã có"
+        skip=$((skip + 1))
+        echo ""
+        continue
+      fi
+    fi
+
+    adb_push_with_progress "$dev" "$local_file"
+
+    if [ $? -eq 0 ]; then
+      ui_ok "   PUSH OK"
+      ok=$((ok + 1))
+
+      if echo "$play_now" | grep -qi '^y'; then
+        adb -s "$dev" shell am start \
+          -a android.intent.action.VIEW \
+          -d "file:///sdcard/Download/$video" \
+          -t "video/*" >/dev/null 2>&1
+
+        if [ $? -eq 0 ]; then
+          ui_ok "   PLAY OK"
+        else
+          ui_err "   PLAY FAIL"
+        fi
+      fi
+    else
+      ui_err "   PUSH FAIL"
+      fail=$((fail + 1))
+    fi
+
+    echo ""
+  done
+
+  ui_info "Kết quả: PUSH_OK=$ok | FAIL=$fail | SKIP=$skip"
+}
+
+download_url_to_cache_and_push() {
+  local url
+  local default_name
+  local new_name
+  local local_file
+  local play_now
+  local dev
+  local ok=0
+  local fail=0
+
+  ui_title
+  ui_info "Tải video từ URL direct vào cache rồi push"
+  ui_line
+
+  printf "%bNhập URL direct:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r url
+
+  if [ -z "$url" ]; then
+    ui_err "URL trống."
     return
   fi
 
-  echo
-  read -rp "Bỏ qua máy đã có video này? [Y/n]: " skip_have
-  [ -z "$skip_have" ] && skip_have="Y"
+  default_name="$(basename "${url%%\?*}" | sed 's/%20/ /g')"
 
-  read -rp "Push xong có phát luôn không? [y/N]: " play_now
+  if [ -z "$default_name" ] || ! echo "$default_name" | grep -q '\.'; then
+    default_name="video_$(date +%Y%m%d_%H%M%S).mp4"
+  fi
 
-  echo
-  echo -e "${YELLOW}Đang push video sang thiết bị đã chọn...${RESET}"
-  echo
+  echo ""
+  ui_dim "Tên gợi ý: $default_name"
+  printf "%bĐổi tên file, Enter để giữ nguyên:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r new_name
 
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
+  [ -z "$new_name" ] && new_name="$default_name"
+  new_name="$(safe_filename "$new_name")"
+  local_file="$CACHE_DIR/$new_name"
 
-    (
-      if echo "$skip_have" | grep -qi '^y'; then
-        if $ADB_BIN -s "$serial" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1; then
-          echo -e "${CYAN}SKIP đã có → $(display_device "$serial")${RESET}"
-          exit 0
-        fi
+  echo ""
+  ui_info "Đang tải về cache:"
+  ui_dim "$local_file"
+
+  if has_cmd curl; then
+    curl -L --progress-bar "$url" -o "$local_file"
+  elif has_cmd wget; then
+    wget -O "$local_file" "$url"
+  else
+    ui_err "Thiếu curl/wget."
+    return
+  fi
+
+  if [ $? -ne 0 ] || [ ! -f "$local_file" ]; then
+    ui_err "Tải thất bại."
+    return
+  fi
+
+  echo "$local_file" > "$LAST_FILE"
+
+  echo ""
+  ui_ok "Tải xong: $local_file"
+  ls -lh "$local_file" 2>/dev/null
+  echo ""
+
+  choose_devices || return
+
+  printf "%bPush xong có phát luôn không? [y/N]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r play_now
+
+  echo ""
+  ui_info "Đang push video đã tải sang thiết bị đã chọn..."
+  echo ""
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+
+    adb_push_with_progress "$dev" "$local_file"
+
+    if [ $? -eq 0 ]; then
+      ui_ok "   PUSH OK"
+      ok=$((ok + 1))
+
+      if echo "$play_now" | grep -qi '^y'; then
+        adb -s "$dev" shell am start \
+          -a android.intent.action.VIEW \
+          -d "file:///sdcard/Download/$(basename "$local_file")" \
+          -t "video/*" >/dev/null 2>&1
       fi
+    else
+      ui_err "   PUSH FAIL"
+      fail=$((fail + 1))
+    fi
 
-      echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
-      $ADB_BIN -s "$serial" push "$local_file" "/sdcard/Download/$video"
-
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
-
-        if echo "$play_now" | grep -qi '^y'; then
-          $ADB_BIN -s "$serial" shell am start \
-            -a android.intent.action.VIEW \
-            -d "file:///sdcard/Download/$video" \
-            -t "video/*" >/dev/null 2>&1
-
-          echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
-        fi
-      else
-        echo -e "${RED}PUSH FAIL → $(display_device "$serial")${RESET}"
-      fi
-    ) &
-
-    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
-      sleep 0.2
-    done
+    echo ""
   done
 
-  wait
-  pause
+  ui_info "Kết quả: OK=$ok | FAIL=$fail"
+}
+
+open_upload_web() {
+  ui_title
+  ui_info "Mở web upload video lấy direct URL"
+  ui_line
+  echo "$UPLOAD_WEB_URL"
+  echo ""
+
+  if [ -x /system/bin/am ]; then
+    /system/bin/am start -a android.intent.action.VIEW -d "$UPLOAD_WEB_URL" >/dev/null 2>&1 && {
+      ui_ok "Đã mở web bằng /system/bin/am"
+      return
+    }
+  fi
+
+  if has_cmd am; then
+    am start -a android.intent.action.VIEW -d "$UPLOAD_WEB_URL" >/dev/null 2>&1 && {
+      ui_ok "Đã mở web bằng am"
+      return
+    }
+  fi
+
+  if has_cmd termux-open-url; then
+    termux-open-url "$UPLOAD_WEB_URL" && {
+      ui_ok "Đã mở web bằng termux-open-url"
+      return
+    }
+  fi
+
+  if has_cmd xdg-open; then
+    xdg-open "$UPLOAD_WEB_URL" >/dev/null 2>&1 && {
+      ui_ok "Đã mở web bằng xdg-open"
+      return
+    }
+  fi
+
+  ui_warn "Không mở tự động được. Copy link trên vào trình duyệt."
+}
+
+go_home_selected() {
+  local dev
+  local ok=0
+  local fail=0
+
+  ui_title
+  ui_info "Đưa thiết bị đã chọn về Home"
+  ui_line
+
+  choose_devices || return
+
+  echo ""
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %b%s%b %b(%s)%b\n" \
+      "$BRIGHT_WHITE$BOLD" "$RESET" \
+      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
+      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+
+    adb -s "$dev" shell input keyevent KEYCODE_HOME >/dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+      ui_ok "   OK"
+      ok=$((ok + 1))
+    else
+      ui_err "   FAIL"
+      fail=$((fail + 1))
+    fi
+
+    echo ""
+  done
+
+  ui_info "Kết quả: OK=$ok | FAIL=$fail"
+}
+
+batch_open_app() {
+  local pkg
+  local dev
+
+  ui_title
+  ui_info "Mở app theo package trên thiết bị đã chọn"
+  ui_line
+
+  printf "%bNhập package app, ví dụ com.zing.zalo:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r pkg
+
+  [ -z "$pkg" ] && return
+
+  choose_devices || return
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+    adb -s "$dev" shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+    [ $? -eq 0 ] && ui_ok "   OK" || ui_err "   FAIL"
+    echo ""
+  done
+}
+
+batch_open_url() {
+  local url
+  local dev
+
+  ui_title
+  ui_info "Mở URL trên thiết bị đã chọn"
+  ui_line
+
+  printf "%bNhập URL:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r url
+
+  [ -z "$url" ] && return
+
+  choose_devices || return
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+    adb -s "$dev" shell am start -a android.intent.action.VIEW -d "$url" >/dev/null 2>&1
+    [ $? -eq 0 ] && ui_ok "   OK" || ui_err "   FAIL"
+    echo ""
+  done
+}
+
+install_apk_selected() {
+  local apk
+  local dev
+
+  ui_title
+  ui_info "Cài APK lên thiết bị đã chọn"
+  ui_line
+
+  printf "%bNhập đường dẫn APK:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  read -r apk
+
+  if [ ! -f "$apk" ]; then
+    ui_err "Không thấy file APK."
+    return
+  fi
+
+  choose_devices || return
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+    adb -s "$dev" install -r "$apk"
+    [ $? -eq 0 ] && ui_ok "   INSTALL OK" || ui_err "   INSTALL FAIL"
+    echo ""
+  done
 }
 
 names_manager() {
+  local c
+  local name
+  local ip
+  local serial
+  local n
+  local devices
+  local dev
+  local brand
+  local model
+  local old_name
+
   while true; do
-    banner
-    echo -e "${CYAN}Quản lý tên máy / IP${RESET}"
-    line
+    ui_title
+    ui_info "Quản lý tên máy / IP"
+    ui_line
     echo "1) Xem danh sách tên máy/IP"
     echo "2) Thêm hoặc sửa tên máy"
     echo "3) Import từ thiết bị đang connect"
     echo "4) Xoá tên máy theo số thứ tự"
     echo "5) Mở file names.txt bằng nano/vi"
     echo "0) Quay lại"
-    line
-    read -rp "Chọn: " c
+    ui_line
+    printf "%bChọn:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+    read -r c
 
     case "$c" in
       1)
-        banner
+        ui_title
         if [ -s "$NAME_FILE" ]; then
           nl -w2 -s") " "$NAME_FILE"
         else
-          echo -e "${RED}Chưa có tên máy nào.${RESET}"
+          ui_warn "Chưa có tên máy nào."
         fi
-        pause
+        pause_enter
         ;;
 
       2)
-        banner
-        echo -e "${YELLOW}Ví dụ:${RESET}"
+        ui_title
+        echo "Ví dụ:"
         echo "Tên máy: K201"
         echo "IP: 10.48.154.201"
         echo "Hệ thống sẽ tự lưu thành 10.48.154.201:$ADB_PORT"
-        echo
+        echo ""
 
-        read -rp "Nhập tên máy: " name
-        read -rp "Nhập IP thiết bị: " ip
+        printf "%bNhập tên máy:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+        read -r name
+        printf "%bNhập IP thiết bị:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+        read -r ip
 
         serial="$(normalize_serial "$ip")"
 
         if [ -z "$name" ] || [ -z "$serial" ]; then
-          echo -e "${RED}Thiếu tên hoặc IP.${RESET}"
-          pause
+          ui_err "Thiếu tên hoặc IP."
+          pause_enter
           continue
         fi
 
@@ -860,81 +1230,79 @@ names_manager() {
         sort -u "$TMP_DIR/names_new.txt" -o "$TMP_DIR/names_new.txt"
         mv "$TMP_DIR/names_new.txt" "$NAME_FILE"
 
-        echo -e "${GREEN}Đã lưu: $name | $serial${RESET}"
-        pause
+        ui_ok "Đã lưu: $name | $serial"
+        pause_enter
         ;;
 
       3)
-        banner
-        devices="$(adb_connected_devices)"
+        ui_title
+        devices="$(list_connected_devices_raw)"
 
         if [ -z "$devices" ]; then
-          echo -e "${RED}Chưa có thiết bị đang connect.${RESET}"
-          pause
+          ui_err "Chưa có thiết bị đang connect."
+          pause_enter
           continue
         fi
 
-        echo "$devices" | while read -r serial; do
-          old_name="$(get_name "$serial")"
-
-          if [ -n "$old_name" ]; then
-            echo -e "${CYAN}Đã có:${RESET} $old_name | $serial"
+        echo "$devices" | while read -r dev; do
+          old_name="$(get_name_by_ip "$dev")"
+          if grep -q "|$dev$" "$NAME_FILE"; then
+            ui_dim "Đã có: $old_name | $dev"
             continue
           fi
 
-          brand="$($ADB_BIN -s "$serial" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
-          model="$($ADB_BIN -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+          brand="$($ADB_BIN -s "$dev" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
+          model="$($ADB_BIN -s "$dev" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
 
-          echo
-          echo -e "${YELLOW}Thiết bị:${RESET} $serial"
+          echo ""
+          ui_info "Thiết bị: $dev"
           echo "Model: $brand $model"
-          read -rp "Đặt tên, bỏ trống để skip: " name
+          printf "%bĐặt tên, bỏ trống để skip:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+          read -r name
 
           if [ -n "$name" ]; then
-            echo "$name|$serial" >> "$NAME_FILE"
-            echo -e "${GREEN}Đã lưu: $name | $serial${RESET}"
+            echo "$name|$dev" >> "$NAME_FILE"
+            ui_ok "Đã lưu: $name | $dev"
           fi
         done
 
         sort -u "$NAME_FILE" -o "$NAME_FILE"
-        pause
+        pause_enter
         ;;
 
       4)
-        banner
-
+        ui_title
         if [ ! -s "$NAME_FILE" ]; then
-          echo -e "${RED}Danh sách trống.${RESET}"
-          pause
+          ui_warn "Danh sách trống."
+          pause_enter
           continue
         fi
 
         nl -w2 -s") " "$NAME_FILE"
-        echo
-        read -rp "Nhập số thứ tự muốn xoá: " n
+        echo ""
+        printf "%bNhập số thứ tự muốn xoá:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+        read -r n
 
         if echo "$n" | grep -Eq '^[0-9]+$'; then
           sed "${n}d" "$NAME_FILE" > "$TMP_DIR/names_del.txt"
           mv "$TMP_DIR/names_del.txt" "$NAME_FILE"
-          echo -e "${GREEN}Đã xoá.${RESET}"
+          ui_ok "Đã xoá."
         else
-          echo -e "${RED}Số không hợp lệ.${RESET}"
+          ui_err "Số không hợp lệ."
         fi
 
-        pause
+        pause_enter
         ;;
 
       5)
         touch "$NAME_FILE"
-
         if has_cmd nano; then
           nano "$NAME_FILE"
         elif has_cmd vi; then
           vi "$NAME_FILE"
         else
-          echo "File: $NAME_FILE"
           cat "$NAME_FILE"
-          pause
+          pause_enter
         fi
         ;;
 
@@ -945,356 +1313,69 @@ names_manager() {
   done
 }
 
-download_url_to_cache() {
-  banner
-  echo -e "${CYAN}Tải video từ URL direct vào cache rồi đẩy sang thiết bị${RESET}"
-  line
-
-  read -rp "Nhập URL direct: " url
-
-  if [ -z "$url" ]; then
-    echo -e "${RED}Chưa nhập URL.${RESET}"
-    pause
-    return
-  fi
-
-  default_name="$(basename "${url%%\?*}" | sed 's/%20/ /g')"
-
-  if [ -z "$default_name" ] || ! echo "$default_name" | grep -q '\.'; then
-    default_name="video_$(date +%Y%m%d_%H%M%S).mp4"
-  fi
-
-  echo
-  echo -e "${YELLOW}Tên gợi ý:${RESET} $default_name"
-  read -rp "Nhập tên mới, Enter để giữ nguyên: " new_name
-
-  [ -z "$new_name" ] && new_name="$default_name"
-  new_name="$(safe_filename "$new_name")"
-
-  local_file="$CACHE_DIR/$new_name"
-
-  echo
-  echo -e "${YELLOW}Đang tải về:${RESET} $local_file"
-
-  if has_cmd curl; then
-    curl -L --progress-bar "$url" -o "$local_file"
-  elif has_cmd wget; then
-    wget -O "$local_file" "$url"
-  else
-    echo -e "${RED}Thiếu curl/wget.${RESET}"
-    pause
-    return
-  fi
-
-  if [ $? -ne 0 ] || [ ! -f "$local_file" ]; then
-    echo -e "${RED}Tải thất bại.${RESET}"
-    pause
-    return
-  fi
-
-  echo "$local_file" > "$LAST_FILE"
-
-  echo
-  echo -e "${GREEN}Tải xong:${RESET} $local_file"
-  ls -lh "$local_file" 2>/dev/null
-  echo
-
-  read -rp "Có đẩy sang thiết bị luôn không? [Y/n]: " do_push
-  [ -z "$do_push" ] && do_push="Y"
-
-  if ! echo "$do_push" | grep -qi '^y'; then
-    pause
-    return
-  fi
-
-  targets="$(select_devices)"
-
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  read -rp "Đẩy xong có mở video luôn không? [y/N]: " play_now
-
-  remote="/sdcard/Download/$new_name"
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
-      $ADB_BIN -s "$serial" push "$local_file" "$remote"
-
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
-
-        if echo "$play_now" | grep -qi '^y'; then
-          $ADB_BIN -s "$serial" shell am start \
-            -a android.intent.action.VIEW \
-            -d "file://$remote" \
-            -t "video/*" >/dev/null 2>&1
-
-          echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
-        fi
-      else
-        echo -e "${RED}PUSH FAIL → $(display_device "$serial")${RESET}"
-      fi
-    ) &
-
-    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
-      sleep 0.2
-    done
-  done
-
-  wait
-  pause
-}
-
-open_upload_web() {
-  banner
-  echo -e "${CYAN}Mở web upload video lấy URL direct${RESET}"
-  line
-  echo "$UPLOAD_WEB_URL"
-  echo
-
-  if has_cmd termux-open-url; then
-    termux-open-url "$UPLOAD_WEB_URL"
-    echo -e "${GREEN}Đã mở web upload.${RESET}"
-  elif has_cmd xdg-open; then
-    xdg-open "$UPLOAD_WEB_URL" >/dev/null 2>&1
-    echo -e "${GREEN}Đã mở web upload.${RESET}"
-  elif has_cmd am; then
-    am start -a android.intent.action.VIEW -d "$UPLOAD_WEB_URL" >/dev/null 2>&1
-    echo -e "${GREEN}Đã mở web upload.${RESET}"
-  else
-    echo -e "${YELLOW}Không tự mở được. Copy link trên vào trình duyệt.${RESET}"
-  fi
-
-  pause
-}
-
-batch_home() {
-  banner
-  echo -e "${CYAN}Đưa thiết bị đã chọn về màn hình Home${RESET}"
-  line
-
-  targets="$(select_devices)"
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      $ADB_BIN -s "$serial" shell input keyevent KEYCODE_HOME >/dev/null 2>&1
-      echo -e "${GREEN}HOME → $(display_device "$serial")${RESET}"
-    ) &
-  done
-
-  wait
-  pause
-}
-
-batch_open_app() {
-  banner
-  echo -e "${CYAN}Mở app hàng loạt theo package name${RESET}"
-  line
-  read -rp "Nhập package app, ví dụ com.zing.zalo: " pkg
-
-  [ -z "$pkg" ] && return
-
-  targets="$(select_devices)"
-
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      $ADB_BIN -s "$serial" shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
-      echo -e "${GREEN}MỞ APP → $(display_device "$serial")${RESET}"
-    ) &
-  done
-
-  wait
-  pause
-}
-
-batch_open_url() {
-  banner
-  echo -e "${CYAN}Mở URL hàng loạt${RESET}"
-  line
-  read -rp "Nhập URL: " url
-
-  [ -z "$url" ] && return
-
-  targets="$(select_devices)"
-
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      $ADB_BIN -s "$serial" shell am start -a android.intent.action.VIEW -d "$url" >/dev/null 2>&1
-      echo -e "${GREEN}MỞ URL → $(display_device "$serial")${RESET}"
-    ) &
-  done
-
-  wait
-  pause
-}
-
-batch_install_apk() {
-  banner
-  echo -e "${CYAN}Cài APK hàng loạt${RESET}"
-  line
-  read -rp "Nhập đường dẫn APK: " apk
-
-  if [ ! -f "$apk" ]; then
-    echo -e "${RED}Không thấy file APK.${RESET}"
-    pause
-    return
-  fi
-
-  targets="$(select_devices)"
-
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
-
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      echo -e "${YELLOW}INSTALL → $(display_device "$serial")${RESET}"
-      $ADB_BIN -s "$serial" install -r "$apk" >/dev/null 2>&1
-
-      if [ $? -eq 0 ]; then
-        echo -e "${GREEN}INSTALL OK → $(display_device "$serial")${RESET}"
-      else
-        echo -e "${RED}INSTALL FAIL → $(display_device "$serial")${RESET}"
-      fi
-    ) &
-
-    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge 4 ]; do
-      sleep 0.2
-    done
-  done
-
-  wait
-  pause
-}
-
 cache_manager() {
+  local c
+  local n
+  local file
+  local play_now
+  local dev
+
   while true; do
-    banner
-    echo -e "${CYAN}Quản lý cache file/video${RESET}"
-    line
+    ui_title
+    ui_info "Quản lý cache file/video"
+    ui_line
     echo "Thư mục cache: $CACHE_DIR"
-    echo
+    echo ""
     echo "1) Xem file cache"
-    echo "2) Đẩy file cache sang thiết bị"
+    echo "2) Push file cache sang thiết bị"
     echo "3) Xoá toàn bộ cache"
     echo "0) Quay lại"
-    line
-    read -rp "Chọn: " c
+    ui_line
+    printf "%bChọn:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+    read -r c
 
     case "$c" in
       1)
-        banner
+        ui_title
         ls -lh "$CACHE_DIR"
-        pause
+        pause_enter
         ;;
 
       2)
-        banner
+        ui_title
         find "$CACHE_DIR" -maxdepth 1 -type f | sort > "$TMP_DIR/cache_files.txt"
 
         if [ ! -s "$TMP_DIR/cache_files.txt" ]; then
-          echo -e "${RED}Cache trống.${RESET}"
-          pause
+          ui_warn "Cache trống."
+          pause_enter
           continue
         fi
 
         nl -w2 -s") " "$TMP_DIR/cache_files.txt"
-        echo
-        read -rp "Chọn số thứ tự file: " n
+        echo ""
+        printf "%bChọn số thứ tự file:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+        read -r n
+
         file="$(sed -n "${n}p" "$TMP_DIR/cache_files.txt")"
 
         if [ ! -f "$file" ]; then
-          echo -e "${RED}File không hợp lệ.${RESET}"
-          pause
+          ui_err "File không hợp lệ."
+          pause_enter
           continue
         fi
 
-        echo "$file" > "$LAST_FILE"
-
-        targets="$(select_devices)"
-
-        if [ -z "$targets" ]; then
-          echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-          pause
-          continue
-        fi
-
-        read -rp "Đẩy xong có mở video luôn không? [y/N]: " play_now
-
-        name="$(basename "$file")"
-        remote="/sdcard/Download/$name"
-
-        echo "$targets" | while read -r serial; do
-          [ -z "$serial" ] && continue
-
-          (
-            echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
-            $ADB_BIN -s "$serial" push "$file" "$remote"
-
-            if [ $? -eq 0 ]; then
-              echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
-
-              if echo "$play_now" | grep -qi '^y'; then
-                $ADB_BIN -s "$serial" shell am start \
-                  -a android.intent.action.VIEW \
-                  -d "file://$remote" \
-                  -t "video/*" >/dev/null 2>&1
-                echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
-              fi
-            else
-              echo -e "${RED}PUSH FAIL → $(display_device "$serial")${RESET}"
-            fi
-          ) &
-
-          while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
-            sleep 0.2
-          done
-        done
-
-        wait
-        pause
+        push_file_to_selected_devices "$file" "$(basename "$file")"
+        pause_enter
         ;;
 
       3)
-        read -rp "Gõ YES để xoá toàn bộ cache: " ok
+        printf "%bGõ YES để xoá toàn bộ cache:%b " "$BRIGHT_RED$BOLD" "$RESET"
+        read -r ok
         if [ "$ok" = "YES" ]; then
           rm -f "$CACHE_DIR"/*
-          echo -e "${GREEN}Đã xoá cache.${RESET}"
+          ui_ok "Đã xoá cache."
         fi
-        pause
+        pause_enter
         ;;
 
       0)
@@ -1305,115 +1386,114 @@ cache_manager() {
 }
 
 dashboard_summary() {
-  banner
-  echo -e "${CYAN}Dashboard trạng thái LabDroid Gateway${RESET}"
-  line
+  ui_title
+  ui_info "Dashboard trạng thái LabDroid Gateway"
+  ui_line
   echo "App dir      : $APP_DIR"
   echo "Cache dir    : $CACHE_DIR"
   echo "Device file  : $DEVICE_FILE"
   echo "Names file   : $NAME_FILE"
   echo "ADB port     : $ADB_PORT cố định"
-  echo
+  echo ""
   echo "ADB:"
   $ADB_BIN version 2>/dev/null | head -n1 || echo "ADB chưa hoạt động"
-  echo
-  echo -e "${GREEN}Tổng thiết bị connected: $(adb_connected_count)${RESET}"
-  echo
-
-  idx=1
-
-  adb_connected_devices | while read -r serial; do
-    brand="$($ADB_BIN -s "$serial" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
-    model="$($ADB_BIN -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
-    battery="$($ADB_BIN -s "$serial" shell dumpsys battery 2>/dev/null | awk -F': ' '/level/ {print $2; exit}' | tr -d '\r')"
-    echo "$idx) $(display_device "$serial") | ${brand:-?} ${model:-?} | Pin: ${battery:-?}%"
-    idx=$((idx + 1))
-  done
-
-  pause
+  echo ""
+  ui_ok "Tổng thiết bị connected: $(connected_count)"
+  echo ""
+  list_connected_devices_named
 }
 
-batch_reboot() {
-  banner
-  echo -e "${RED}Reboot thiết bị đã chọn${RESET}"
-  line
+reboot_selected() {
+  local dev
 
-  targets="$(select_devices)"
+  ui_title
+  ui_err "Reboot thiết bị đã chọn"
+  ui_line
 
-  if [ -z "$targets" ]; then
-    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
-    pause
-    return
-  fi
+  choose_devices || return
 
-  echo
-  read -rp "Gõ YES để xác nhận reboot: " ok
+  echo ""
+  printf "%bGõ YES để xác nhận reboot:%b " "$BRIGHT_RED$BOLD" "$RESET"
+  read -r ok
 
   [ "$ok" != "YES" ] && return
 
-  echo "$targets" | while read -r serial; do
-    [ -z "$serial" ] && continue
-
-    (
-      $ADB_BIN -s "$serial" reboot >/dev/null 2>&1
-      echo -e "${YELLOW}REBOOT → $(display_device "$serial")${RESET}"
-    ) &
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+    adb -s "$dev" reboot >/dev/null 2>&1
+    [ $? -eq 0 ] && ui_ok "   REBOOT SENT" || ui_err "   FAIL"
+    echo ""
   done
-
-  wait
-  pause
 }
 
 main_menu() {
-  auto_install_missing
+  local choice
 
   while true; do
-    banner
-    echo -e "1)  🔎 ${CYAN}Scan subnet và connect thiết bị Android lab port ${ADB_PORT}${RESET}"
-    echo -e "2)  🔗 ${GREEN}Connect IP thủ công port ${ADB_PORT}${RESET}"
-    echo -e "3)  📋 ${YELLOW}Xem thiết bị Android lab đang connect${RESET}"
-    echo -e "4)  📤 ${MAGENTA}Đẩy file/video lên thiết bị đã chọn${RESET}"
-    echo -e "5)  🎬 ${CYAN}Liệt kê video trong lab rồi chọn mở${RESET}"
-    echo -e "6)  🔄 ${GREEN}Liệt kê video trong lab rồi chọn đồng bộ/push${RESET}"
-    echo -e "7)  🗂️  ${YELLOW}Quản lý tên máy / IP${RESET}"
-    echo -e "8)  🌐 ${CYAN}Tải video direct URL vào cache rồi đẩy sang thiết bị${RESET}"
-    echo -e "9)  🌍 ${BLUE}Mở web upload video lấy direct URL${RESET}"
-    echo -e "10) 🏠 ${CYAN}Đưa thiết bị đã chọn về Home${RESET}"
-    echo -e "11) 📦 ${YELLOW}Cài APK lên thiết bị đã chọn${RESET}"
-    echo -e "12) 🚀 ${GREEN}Mở app theo package trên thiết bị đã chọn${RESET}"
-    echo -e "13) 🔗 ${BLUE}Mở URL trên thiết bị đã chọn${RESET}"
-    echo -e "14) 🧹 ${MAGENTA}Quản lý cache file/video${RESET}"
-    echo -e "15) 📊 ${CYAN}Dashboard trạng thái Gateway${RESET}"
-    echo -e "16) ♻️  ${YELLOW}Connect lại danh sách thiết bị đã scan${RESET}"
-    echo -e "17) ⚡ ${GREEN}Scan nhanh 10.48.154 + 10.48.155 port ${ADB_PORT}${RESET}"
-    echo -e "18) 🔁 ${RED}Reboot thiết bị đã chọn${RESET}"
-    echo -e "0)  ✖ ${RED}Thoát${RESET}"
-    line
-    read -rp "Chọn: " c
+    ui_title
+    printf "%b1)%b  %bScan subnet và connect thiết bị Android lab port %s%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$ADB_PORT" "$RESET"
+    printf "%b2)%b  %bConnect IP thủ công port %s%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
+    printf "%b3)%b  %bXem thiết bị Android lab đang connect%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
+    printf "%b4)%b  %bPush file/video lên thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_MAGENTA$BOLD" "$RESET"
+    printf "%b5)%b  %bLiệt kê video trong lab rồi chọn mở%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
+    printf "%b6)%b  %bLiệt kê video trong lab rồi chọn đồng bộ/push%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$RESET"
+    printf "%b7)%b  %bQuản lý tên máy / IP%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
+    printf "%b8)%b  %bTải video direct URL vào cache rồi push%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
+    printf "%b9)%b  %bMở web upload video lấy direct URL%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_BLUE$BOLD" "$RESET"
+    printf "%b10)%b %bĐưa thiết bị đã chọn về Home%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
+    printf "%b11)%b %bCài APK lên thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
+    printf "%b12)%b %bMở app theo package trên thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$RESET"
+    printf "%b13)%b %bMở URL trên thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_BLUE$BOLD" "$RESET"
+    printf "%b14)%b %bQuản lý cache file/video%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_MAGENTA$BOLD" "$RESET"
+    printf "%b15)%b %bDashboard trạng thái Gateway%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
+    printf "%b16)%b %bConnect lại danh sách thiết bị đã scan%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
+    printf "%b17)%b %bScan nhanh 10.48.154 + 10.48.155 port %s%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
+    printf "%b18)%b %bReboot thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_RED$BOLD" "$RESET"
+    printf "%b0)%b  %bThoát%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_RED$BOLD" "$RESET"
+    ui_line
+    printf "%bChọn:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+    read -r choice
 
-    case "$c" in
-      1) scan_and_connect_subnets_5555 ;;
-      2) connect_manual_5555 ;;
-      3) list_adb_devices ;;
-      4) batch_push_file ;;
-      5) feature_open_lab_video ;;
-      6) feature_sync_lab_video ;;
+    case "$choice" in
+      1) scan_and_connect_subnet; pause_enter ;;
+      2) connect_manual; pause_enter ;;
+      3) ui_title; list_connected_devices_named; pause_enter ;;
+      4) push_local_file_menu; pause_enter ;;
+      5) open_lab_video_menu; pause_enter ;;
+      6) sync_lab_video_menu; pause_enter ;;
       7) names_manager ;;
-      8) download_url_to_cache ;;
-      9) open_upload_web ;;
-      10) batch_home ;;
-      11) batch_install_apk ;;
-      12) batch_open_app ;;
-      13) batch_open_url ;;
+      8) download_url_to_cache_and_push; pause_enter ;;
+      9) open_upload_web; pause_enter ;;
+      10) go_home_selected; pause_enter ;;
+      11) install_apk_selected; pause_enter ;;
+      12) batch_open_app; pause_enter ;;
+      13) batch_open_url; pause_enter ;;
       14) cache_manager ;;
-      15) dashboard_summary ;;
-      16) connect_saved_devices ;;
-      17) quick_scan_154_155 ;;
-      18) batch_reboot ;;
-      0) exit 0 ;;
-      *) ;;
+      15) dashboard_summary; pause_enter ;;
+      16) connect_saved_devices; pause_enter ;;
+      17) quick_scan_154_155; pause_enter ;;
+      18) reboot_selected; pause_enter ;;
+      0)
+        clear
+        ui_ok "Đã thoát."
+        exit 0
+        ;;
+      *)
+        ui_err "Lựa chọn không hợp lệ."
+        pause_enter
+        ;;
     esac
   done
 }
 
-main_menu
+main() {
+  mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
+  touch "$DEVICE_FILE" "$NAME_FILE" "$LAST_FILE"
+
+  auto_install_missing
+  adb_start_clean
+
+  main_menu
+}
+
+main
