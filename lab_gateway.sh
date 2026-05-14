@@ -4,10 +4,11 @@
 # LabDroid Gateway
 # Android Lab Edge Controller
 #
-# SAFETY BOUNDARY:
+# SAFETY / PRODUCT BOUNDARY:
 # - Chỉ scan/connect TCP port 5555.
-# - Không hỗ trợ custom port.
-# - Dành cho Android lab đã chủ động bật ADB over Wi-Fi port 5555.
+# - Không có custom port.
+# - Không nhận port từ người dùng.
+# - Dành cho Android lab devices đã được chủ sở hữu bật ADB Wi-Fi.
 # ============================================================
 
 ADB_PORT=5555
@@ -24,6 +25,7 @@ UPLOAD_WEB_URL="https://thong-url-1.onrender.com"
 COMMON_THRESHOLD_PERCENT=60
 SCAN_CONCURRENCY=64
 ADB_CONCURRENCY=24
+VIDEO_SCAN_CONCURRENCY=12
 PUSH_CONCURRENCY=3
 
 mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
@@ -76,6 +78,7 @@ detect_env() {
 
 auto_install_missing() {
   local missing=""
+
   for c in bash adb timeout awk grep sed sort wc seq; do
     if ! has_cmd "$c"; then
       missing="$missing $c"
@@ -122,13 +125,15 @@ safe_filename() {
 normalize_serial() {
   local s="$1"
   s="$(echo "$s" | tr -d ' ')"
+
   if [ -z "$s" ]; then
     echo ""
-  elif echo "$s" | grep -q ':'; then
-    echo "$s"
-  else
-    echo "$s:$ADB_PORT"
+    return
   fi
+
+  ip_only="${s%%:*}"
+
+  echo "$ip_only:$ADB_PORT"
 }
 
 check_adb_port_5555() {
@@ -153,6 +158,7 @@ display_device() {
   local serial="$1"
   local name
   name="$(get_name "$serial")"
+
   if [ -n "$name" ]; then
     echo "$name | $serial"
   else
@@ -162,13 +168,21 @@ display_device() {
 
 save_device() {
   local serial="$1"
-  echo "$serial" >> "$DEVICE_FILE"
-  sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
+
+  if echo "$serial" | grep -q ":$ADB_PORT$"; then
+    echo "$serial" >> "$DEVICE_FILE"
+    sort -u "$DEVICE_FILE" -o "$DEVICE_FILE"
+  fi
 }
 
 adb_connect_twice() {
   local serial="$1"
   serial="$(normalize_serial "$serial")"
+
+  if [ -z "$serial" ]; then
+    echo -e "${RED}Serial/IP trống.${RESET}"
+    return 1
+  fi
 
   if ! echo "$serial" | grep -q ":$ADB_PORT$"; then
     echo -e "${RED}BỎ QUA: chỉ cho phép port $ADB_PORT → $serial${RESET}"
@@ -189,42 +203,59 @@ adb_connect_twice() {
   fi
 }
 
+print_connected_devices_for_select() {
+  local devices_file="$1"
+  local idx=1
+
+  echo >&2
+  echo -e "${CYAN}Danh sách thiết bị đang connect:${RESET}" >&2
+  echo >&2
+
+  while read -r serial; do
+    [ -z "$serial" ] && continue
+    echo "$idx) $(display_device "$serial")" >&2
+    idx=$((idx + 1))
+  done < "$devices_file"
+
+  echo >&2
+  echo -e "${YELLOW}Cách chọn:${RESET}" >&2
+  echo "  - Chọn 1 máy      : 1" >&2
+  echo "  - Chọn nhiều máy  : 1 2 5" >&2
+  echo "  - Chọn tất cả     : all" >&2
+  echo >&2
+}
+
 select_devices() {
   local devices_file="$TMP_DIR/select_devices.txt"
+  local out_file="$TMP_DIR/selected_devices.txt"
+
   adb_connected_devices > "$devices_file"
 
   if [ ! -s "$devices_file" ]; then
+    echo -e "${RED}Không có thiết bị nào đang connect port $ADB_PORT.${RESET}" >&2
+    echo -e "${YELLOW}Hãy vào mục scan/connect trước rồi thử lại.${RESET}" >&2
     echo ""
     return
   fi
 
-  echo
-  echo -e "${CYAN}Danh sách thiết bị đang connect:${RESET}"
-  echo
+  print_connected_devices_for_select "$devices_file"
 
-  local idx=1
-  while read -r serial; do
-    echo "$idx) $(display_device "$serial")"
-    idx=$((idx + 1))
-  done < "$devices_file"
+  read -rp "Chọn thiết bị: " choice >&2
 
-  echo
-  echo -e "${YELLOW}Nhập số thứ tự, ví dụ:${RESET} 1 2 5"
-  echo -e "${YELLOW}Hoặc nhập:${RESET} all / tatca / tất cả"
-  echo
-
-  read -rp "Chọn thiết bị: " choice
-
-  if [ -z "$choice" ] || echo "$choice" | grep -Eiq '^(all|tatca|tất cả|tat ca|a)$'; then
+  if [ -z "$choice" ] || echo "$choice" | grep -Eiq '^(all|a|tatca|tat ca|tất cả)$'; then
     cat "$devices_file"
     return
   fi
 
+  > "$out_file"
+
   for n in $choice; do
     if echo "$n" | grep -Eq '^[0-9]+$'; then
-      sed -n "${n}p" "$devices_file"
+      sed -n "${n}p" "$devices_file" >> "$out_file"
     fi
-  done | grep -v '^$' | sort -u
+  done
+
+  sort -u "$out_file" | grep -v '^$' || true
 }
 
 scan_subnets_5555() {
@@ -253,6 +284,7 @@ scan_subnets_5555() {
   for subnet in $subnets; do
     for i in $(seq 1 254); do
       ip="$subnet.$i"
+
       (
         if check_adb_port_5555 "$ip"; then
           serial="$ip:$ADB_PORT"
@@ -301,6 +333,7 @@ scan_and_connect_subnets_5555() {
   for subnet in $subnets; do
     for i in $(seq 1 254); do
       ip="$subnet.$i"
+
       (
         if check_adb_port_5555 "$ip"; then
           serial="$ip:$ADB_PORT"
@@ -348,6 +381,7 @@ quick_scan_154_155() {
   for subnet in 154 155; do
     for i in $(seq 1 254); do
       ip="10.48.$subnet.$i"
+
       (
         if check_adb_port_5555 "$ip"; then
           serial="$ip:$ADB_PORT"
@@ -391,7 +425,8 @@ connect_manual_5555() {
   fi
 
   for ip in $ips; do
-    serial="${ip%%:*}:$ADB_PORT"
+    serial="$(normalize_serial "$ip")"
+
     (
       adb_connect_twice "$serial"
     ) &
@@ -419,6 +454,7 @@ connect_saved_devices() {
 
   while read -r serial; do
     serial="$(normalize_serial "$serial")"
+
     if echo "$serial" | grep -q ":$ADB_PORT$"; then
       (
         adb_connect_twice "$serial"
@@ -443,6 +479,7 @@ list_adb_devices() {
   line
 
   local idx=1
+
   adb_connected_devices | while read -r serial; do
     model="$($ADB_BIN -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
     brand="$($ADB_BIN -s "$serial" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
@@ -471,7 +508,7 @@ batch_push_file() {
   fi
 
   if [ ! -f "$file" ]; then
-    echo -e "${RED}Không thấy file.${RESET}"
+    echo -e "${RED}Không thấy file:${RESET} $file"
     pause
     return
   fi
@@ -479,6 +516,7 @@ batch_push_file() {
   echo "$file" > "$LAST_FILE"
 
   targets="$(select_devices)"
+
   if [ -z "$targets" ]; then
     echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
     pause
@@ -489,10 +527,13 @@ batch_push_file() {
   remote="/sdcard/Download/$filename"
 
   echo
+  echo -e "${YELLOW}File nguồn:${RESET} $file"
   echo -e "${YELLOW}Đường dẫn đích:${RESET} $remote"
   echo
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
       $ADB_BIN -s "$serial" push "$file" "$remote"
@@ -515,9 +556,9 @@ batch_push_file() {
 
 get_remote_videos() {
   local serial="$1"
-  $ADB_BIN -s "$serial" shell 'find /sdcard/Download -maxdepth 1 -type f 2>/dev/null' | \
+
+  $ADB_BIN -s "$serial" shell 'ls -1 /sdcard/Download 2>/dev/null' | \
     tr -d '\r' | \
-    sed 's#^/sdcard/Download/##' | \
     grep -Ei '\.(mp4|mkv|avi|mov|m4v|3gp|webm)$' | \
     sort -u
 }
@@ -527,63 +568,89 @@ build_common_video_list() {
   local map_file="$TMP_DIR/video_map.txt"
   local common_file="$TMP_DIR/common_videos.txt"
   local raw_file="$TMP_DIR/common_raw.txt"
+  local device_file="$TMP_DIR/video_devices.txt"
 
   > "$vote_file"
   > "$map_file"
   > "$common_file"
   > "$raw_file"
+  > "$device_file"
 
-  devices="$(adb_connected_devices)"
-  if [ -z "$devices" ]; then
-    echo -e "${RED}Chưa có thiết bị ADB connected.${RESET}"
+  adb_connected_devices > "$device_file"
+
+  if [ ! -s "$device_file" ]; then
+    echo -e "${RED}Chưa có thiết bị ADB connected port $ADB_PORT.${RESET}" >&2
+    echo -e "${YELLOW}Hãy scan/connect trước rồi thử lại.${RESET}" >&2
     return 1
   fi
 
-  count="$(echo "$devices" | wc -l | tr -d ' ')"
+  local count
+  count="$(wc -l < "$device_file" | tr -d ' ')"
+
+  local required
   required=$(( (count * COMMON_THRESHOLD_PERCENT + 99) / 100 ))
 
-  echo -e "${YELLOW}Đang quét video trong /sdcard/Download...${RESET}"
-  echo
+  echo >&2
+  echo -e "${YELLOW}Đang quét video trong /sdcard/Download trên $count thiết bị...${RESET}" >&2
+  echo -e "${YELLOW}Ngưỡng hiện tại:${RESET} $COMMON_THRESHOLD_PERCENT% = tối thiểu $required/$count thiết bị có cùng video" >&2
+  echo >&2
 
-  echo "$devices" | while read -r serial; do
+  while read -r serial; do
     (
-      videos="$(get_remote_videos "$serial")"
-      if [ -n "$videos" ]; then
-        echo "$videos" | while read -r v; do
+      tmp_each="$TMP_DIR/videos_${serial//[:.]/_}.txt"
+
+      get_remote_videos "$serial" > "$tmp_each"
+
+      if [ -s "$tmp_each" ]; then
+        while read -r v; do
+          [ -z "$v" ] && continue
           echo "$v" >> "$vote_file"
           echo "$v|$serial" >> "$map_file"
-        done
+        done < "$tmp_each"
+
+        echo -e "${GREEN}DONE → $(display_device "$serial") | $(wc -l < "$tmp_each" | tr -d ' ') video${RESET}" >&2
+      else
+        echo -e "${YELLOW}EMPTY → $(display_device "$serial") | không thấy video${RESET}" >&2
       fi
-      echo -e "${GREEN}DONE → $(display_device "$serial")${RESET}"
     ) &
-  done
+
+    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$VIDEO_SCAN_CONCURRENCY" ]; do
+      sleep 0.05
+    done
+  done < "$device_file"
 
   wait
 
   if [ ! -s "$vote_file" ]; then
-    echo -e "${RED}Không tìm thấy video nào.${RESET}"
+    echo >&2
+    echo -e "${RED}Không tìm thấy video nào trong /sdcard/Download.${RESET}" >&2
     return 1
   fi
 
-  sort "$vote_file" | uniq -c | sort -nr | awk -v req="$required" '$1 >= req {print}' > "$raw_file"
+  sort "$vote_file" | uniq -c | sort -nr > "$TMP_DIR/all_video_count.txt"
+  awk -v req="$required" '$1 >= req {print}' "$TMP_DIR/all_video_count.txt" > "$raw_file"
 
   if [ ! -s "$raw_file" ]; then
-    echo -e "${RED}Không có video nào đạt ngưỡng $COMMON_THRESHOLD_PERCENT%.${RESET}"
-    echo -e "${YELLOW}Tổng thiết bị: $count | Cần tối thiểu: $required thiết bị cùng có video.${RESET}"
+    echo >&2
+    echo -e "${RED}Không có video nào đạt ngưỡng $COMMON_THRESHOLD_PERCENT%.${RESET}" >&2
+    echo -e "${YELLOW}Danh sách video tìm thấy:${RESET}" >&2
+    nl -w2 -s") " "$TMP_DIR/all_video_count.txt" >&2
+    echo >&2
+    echo -e "${YELLOW}Gợi ý:${RESET} đổi COMMON_THRESHOLD_PERCENT=60 xuống 30 hoặc 40 nếu lab đang chưa đồng đều video." >&2
     return 1
   fi
 
   awk '{$1=""; sub(/^ /,""); print}' "$raw_file" > "$common_file"
 
-  echo
-  echo -e "${CYAN}Video đạt ngưỡng $COMMON_THRESHOLD_PERCENT%:${RESET}"
-  echo -e "${CYAN}Tổng thiết bị: $count | Ngưỡng: $required${RESET}"
-  echo
+  echo >&2
+  echo -e "${CYAN}Video đạt ngưỡng $COMMON_THRESHOLD_PERCENT%:${RESET}" >&2
+  echo >&2
 
-  idx=1
+  local idx=1
   while read -r video; do
+    [ -z "$video" ] && continue
     have_count="$(grep -Fx "$video" "$vote_file" | wc -l | tr -d ' ')"
-    echo "$idx) [$have_count/$count] $video"
+    echo "$idx) [$have_count/$count] $video" >&2
     idx=$((idx + 1))
   done < "$common_file"
 
@@ -593,46 +660,29 @@ build_common_video_list() {
 choose_common_video() {
   build_common_video_list || return 1
 
-  echo
-  read -rp "Chọn số thứ tự video: " n
+  echo >&2
+  echo -e "${YELLOW}Cách chọn:${RESET} nhập số thứ tự video, ví dụ 1 hoặc 2" >&2
+  read -rp "Chọn video số: " n >&2
 
   if ! echo "$n" | grep -Eq '^[0-9]+$'; then
-    echo -e "${RED}Lựa chọn không hợp lệ.${RESET}"
+    echo -e "${RED}Lựa chọn không hợp lệ.${RESET}" >&2
     return 1
   fi
 
+  local video
   video="$(sed -n "${n}p" "$TMP_DIR/common_videos.txt")"
 
   if [ -z "$video" ]; then
-    echo -e "${RED}Không có video ở số thứ tự này.${RESET}"
+    echo -e "${RED}Không có video ở số thứ tự này.${RESET}" >&2
     return 1
   fi
 
-  echo "$video"
-}
-
-open_video_on_targets() {
-  local video="$1"
-  local targets="$2"
-  local remote="/sdcard/Download/$video"
-
-  echo "$targets" | while read -r serial; do
-    (
-      $ADB_BIN -s "$serial" shell am start \
-        -a android.intent.action.VIEW \
-        -d "file://$remote" \
-        -t "video/*" >/dev/null 2>&1
-
-      echo -e "${GREEN}MỞ VIDEO → $(display_device "$serial")${RESET}"
-    ) &
-  done
-
-  wait
+  printf "%s\n" "$video"
 }
 
 feature_open_common_video() {
   banner
-  echo -e "${CYAN}Mở video đạt ngưỡng trên thiết bị đã chọn${RESET}"
+  echo -e "${CYAN}Tìm video đạt ngưỡng và mở theo lựa chọn${RESET}"
   line
 
   video="$(choose_common_video)" || {
@@ -641,27 +691,47 @@ feature_open_common_video() {
   }
 
   echo
-  echo -e "${YELLOW}Video đã chọn:${RESET} $video"
+  echo -e "${GREEN}Video đã chọn:${RESET} $video"
 
   targets="$(select_devices)"
+
   if [ -z "$targets" ]; then
     echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
     pause
     return
   fi
 
-  open_video_on_targets "$video" "$targets"
+  echo
+  echo -e "${YELLOW}Đang mở video trên thiết bị đã chọn...${RESET}"
+  echo
+
+  echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
+    (
+      $ADB_BIN -s "$serial" shell am start \
+        -a android.intent.action.VIEW \
+        -d "file:///sdcard/Download/$video" \
+        -t "video/*" >/dev/null 2>&1
+
+      echo -e "${GREEN}MỞ VIDEO → $(display_device "$serial")${RESET}"
+    ) &
+  done
+
+  wait
   pause
 }
 
 device_has_video() {
   local serial="$1"
   local video="$2"
+
   $ADB_BIN -s "$serial" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1
 }
 
 find_source_device_for_video() {
   local video="$1"
+
   adb_connected_devices | while read -r serial; do
     if device_has_video "$serial" "$video"; then
       echo "$serial"
@@ -672,13 +742,16 @@ find_source_device_for_video() {
 
 feature_sync_common_video() {
   banner
-  echo -e "${CYAN}Đồng bộ video đạt ngưỡng sang thiết bị khác${RESET}"
+  echo -e "${CYAN}Đồng bộ video đạt ngưỡng sang thiết bị đã chọn${RESET}"
   line
 
   video="$(choose_common_video)" || {
     pause
     return
   }
+
+  echo
+  echo -e "${GREEN}Video đã chọn:${RESET} $video"
 
   source_serial="$(find_source_device_for_video "$video")"
 
@@ -688,15 +761,13 @@ feature_sync_common_video() {
     return
   fi
 
-  echo
-  echo -e "${YELLOW}Video đã chọn:${RESET} $video"
   echo -e "${CYAN}Máy nguồn:${RESET} $(display_device "$source_serial")"
 
   local_name="$(safe_filename "$video")"
   local_file="$CACHE_DIR/$local_name"
 
   if [ -f "$local_file" ]; then
-    echo -e "${GREEN}Đã có trong cache:${RESET} $local_file"
+    echo -e "${GREEN}Cache đã có:${RESET} $local_file"
   else
     echo -e "${YELLOW}Đang pull video từ máy nguồn về cache...${RESET}"
     $ADB_BIN -s "$source_serial" pull "/sdcard/Download/$video" "$local_file"
@@ -709,6 +780,7 @@ feature_sync_common_video() {
   fi
 
   targets="$(select_devices)"
+
   if [ -z "$targets" ]; then
     echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
     pause
@@ -722,10 +794,12 @@ feature_sync_common_video() {
   read -rp "Đồng bộ xong có phát luôn không? [y/N]: " play_now
 
   echo
-  echo -e "${YELLOW}Đang đồng bộ...${RESET}"
+  echo -e "${YELLOW}Đang đồng bộ video...${RESET}"
   echo
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       if echo "$skip_have" | grep -qi '^y'; then
         if device_has_video "$serial" "$video"; then
@@ -745,6 +819,7 @@ feature_sync_common_video() {
             -a android.intent.action.VIEW \
             -d "file:///sdcard/Download/$video" \
             -t "video/*" >/dev/null 2>&1
+
           echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
         fi
       else
@@ -785,10 +860,18 @@ names_manager() {
         fi
         pause
         ;;
+
       2)
         banner
-        read -rp "Nhập tên máy, ví dụ K201: " name
-        read -rp "Nhập IP thiết bị, ví dụ 10.48.154.201: " ip
+        echo -e "${YELLOW}Ví dụ:${RESET}"
+        echo "Tên máy: K201"
+        echo "IP: 10.48.154.201"
+        echo "Hệ thống sẽ tự lưu thành 10.48.154.201:$ADB_PORT"
+        echo
+
+        read -rp "Nhập tên máy: " name
+        read -rp "Nhập IP thiết bị: " ip
+
         serial="$(normalize_serial "$ip")"
 
         if [ -z "$name" ] || [ -z "$serial" ]; then
@@ -811,9 +894,11 @@ names_manager() {
         echo -e "${GREEN}Đã lưu: $name | $serial${RESET}"
         pause
         ;;
+
       3)
         banner
         devices="$(adb_connected_devices)"
+
         if [ -z "$devices" ]; then
           echo -e "${RED}Chưa có thiết bị đang connect.${RESET}"
           pause
@@ -822,6 +907,7 @@ names_manager() {
 
         echo "$devices" | while read -r serial; do
           old_name="$(get_name "$serial")"
+
           if [ -n "$old_name" ]; then
             echo -e "${CYAN}Đã có:${RESET} $old_name | $serial"
             continue
@@ -844,8 +930,10 @@ names_manager() {
         sort -u "$NAME_FILE" -o "$NAME_FILE"
         pause
         ;;
+
       4)
         banner
+
         if [ ! -s "$NAME_FILE" ]; then
           echo -e "${RED}Danh sách trống.${RESET}"
           pause
@@ -863,10 +951,13 @@ names_manager() {
         else
           echo -e "${RED}Số không hợp lệ.${RESET}"
         fi
+
         pause
         ;;
+
       5)
         touch "$NAME_FILE"
+
         if has_cmd nano; then
           nano "$NAME_FILE"
         elif has_cmd vi; then
@@ -877,6 +968,7 @@ names_manager() {
           pause
         fi
         ;;
+
       0)
         return
         ;;
@@ -890,6 +982,7 @@ download_url_to_cache() {
   line
 
   read -rp "Nhập URL direct: " url
+
   if [ -z "$url" ]; then
     echo -e "${RED}Chưa nhập URL.${RESET}"
     pause
@@ -897,6 +990,7 @@ download_url_to_cache() {
   fi
 
   default_name="$(basename "${url%%\?*}" | sed 's/%20/ /g')"
+
   if [ -z "$default_name" ] || ! echo "$default_name" | grep -q '\.'; then
     default_name="video_$(date +%Y%m%d_%H%M%S).mp4"
   fi
@@ -904,6 +998,7 @@ download_url_to_cache() {
   echo
   echo -e "${YELLOW}Tên gợi ý:${RESET} $default_name"
   read -rp "Nhập tên mới, Enter để giữ nguyên: " new_name
+
   [ -z "$new_name" ] && new_name="$default_name"
   new_name="$(safe_filename "$new_name")"
 
@@ -929,10 +1024,12 @@ download_url_to_cache() {
   fi
 
   echo "$local_file" > "$LAST_FILE"
-  echo -e "${GREEN}Tải xong.${RESET}"
-  ls -lh "$local_file" 2>/dev/null
 
   echo
+  echo -e "${GREEN}Tải xong:${RESET} $local_file"
+  ls -lh "$local_file" 2>/dev/null
+  echo
+
   read -rp "Có đẩy sang thiết bị luôn không? [Y/n]: " do_push
   [ -z "$do_push" ] && do_push="Y"
 
@@ -942,6 +1039,7 @@ download_url_to_cache() {
   fi
 
   targets="$(select_devices)"
+
   if [ -z "$targets" ]; then
     echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
     pause
@@ -953,17 +1051,21 @@ download_url_to_cache() {
   remote="/sdcard/Download/$new_name"
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
       $ADB_BIN -s "$serial" push "$local_file" "$remote"
 
       if [ $? -eq 0 ]; then
         echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
+
         if echo "$play_now" | grep -qi '^y'; then
           $ADB_BIN -s "$serial" shell am start \
             -a android.intent.action.VIEW \
             -d "file://$remote" \
             -t "video/*" >/dev/null 2>&1
+
           echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
         fi
       else
@@ -1016,6 +1118,8 @@ batch_home() {
   fi
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       $ADB_BIN -s "$serial" shell input keyevent KEYCODE_HOME >/dev/null 2>&1
       echo -e "${GREEN}HOME → $(display_device "$serial")${RESET}"
@@ -1031,12 +1135,20 @@ batch_open_app() {
   echo -e "${CYAN}Mở app hàng loạt theo package name${RESET}"
   line
   read -rp "Nhập package app, ví dụ com.zing.zalo: " pkg
+
   [ -z "$pkg" ] && return
 
   targets="$(select_devices)"
-  [ -z "$targets" ] && echo -e "${RED}Không có thiết bị nào được chọn.${RESET}" && pause && return
+
+  if [ -z "$targets" ]; then
+    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
+    pause
+    return
+  fi
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       $ADB_BIN -s "$serial" shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
       echo -e "${GREEN}MỞ APP → $(display_device "$serial")${RESET}"
@@ -1052,12 +1164,20 @@ batch_open_url() {
   echo -e "${CYAN}Mở URL hàng loạt${RESET}"
   line
   read -rp "Nhập URL: " url
+
   [ -z "$url" ] && return
 
   targets="$(select_devices)"
-  [ -z "$targets" ] && echo -e "${RED}Không có thiết bị nào được chọn.${RESET}" && pause && return
+
+  if [ -z "$targets" ]; then
+    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
+    pause
+    return
+  fi
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       $ADB_BIN -s "$serial" shell am start -a android.intent.action.VIEW -d "$url" >/dev/null 2>&1
       echo -e "${GREEN}MỞ URL → $(display_device "$serial")${RESET}"
@@ -1081,9 +1201,16 @@ batch_install_apk() {
   fi
 
   targets="$(select_devices)"
-  [ -z "$targets" ] && echo -e "${RED}Không có thiết bị nào được chọn.${RESET}" && pause && return
+
+  if [ -z "$targets" ]; then
+    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
+    pause
+    return
+  fi
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       echo -e "${YELLOW}INSTALL → $(display_device "$serial")${RESET}"
       $ADB_BIN -s "$serial" install -r "$apk" >/dev/null 2>&1
@@ -1124,6 +1251,7 @@ cache_manager() {
         ls -lh "$CACHE_DIR"
         pause
         ;;
+
       2)
         banner
         find "$CACHE_DIR" -maxdepth 1 -type f | sort > "$TMP_DIR/cache_files.txt"
@@ -1146,8 +1274,51 @@ cache_manager() {
         fi
 
         echo "$file" > "$LAST_FILE"
-        batch_push_file
+
+        targets="$(select_devices)"
+
+        if [ -z "$targets" ]; then
+          echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
+          pause
+          continue
+        fi
+
+        read -rp "Đẩy xong có mở video luôn không? [y/N]: " play_now
+
+        name="$(basename "$file")"
+        remote="/sdcard/Download/$name"
+
+        echo "$targets" | while read -r serial; do
+          [ -z "$serial" ] && continue
+
+          (
+            echo -e "${YELLOW}PUSH → $(display_device "$serial")${RESET}"
+            $ADB_BIN -s "$serial" push "$file" "$remote"
+
+            if [ $? -eq 0 ]; then
+              echo -e "${GREEN}PUSH OK → $(display_device "$serial")${RESET}"
+
+              if echo "$play_now" | grep -qi '^y'; then
+                $ADB_BIN -s "$serial" shell am start \
+                  -a android.intent.action.VIEW \
+                  -d "file://$remote" \
+                  -t "video/*" >/dev/null 2>&1
+                echo -e "${GREEN}PHÁT → $(display_device "$serial")${RESET}"
+              fi
+            else
+              echo -e "${RED}PUSH FAIL → $(display_device "$serial")${RESET}"
+            fi
+          ) &
+
+          while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
+            sleep 0.2
+          done
+        done
+
+        wait
+        pause
         ;;
+
       3)
         read -rp "Gõ YES để xoá toàn bộ cache: " ok
         if [ "$ok" = "YES" ]; then
@@ -1156,6 +1327,7 @@ cache_manager() {
         fi
         pause
         ;;
+
       0)
         return
         ;;
@@ -1180,6 +1352,7 @@ dashboard_summary() {
   echo
 
   idx=1
+
   adb_connected_devices | while read -r serial; do
     brand="$($ADB_BIN -s "$serial" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
     model="$($ADB_BIN -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
@@ -1197,13 +1370,21 @@ batch_reboot() {
   line
 
   targets="$(select_devices)"
-  [ -z "$targets" ] && echo -e "${RED}Không có thiết bị nào được chọn.${RESET}" && pause && return
+
+  if [ -z "$targets" ]; then
+    echo -e "${RED}Không có thiết bị nào được chọn.${RESET}"
+    pause
+    return
+  fi
 
   echo
   read -rp "Gõ YES để xác nhận reboot: " ok
+
   [ "$ok" != "YES" ] && return
 
   echo "$targets" | while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       $ADB_BIN -s "$serial" reboot >/dev/null 2>&1
       echo -e "${YELLOW}REBOOT → $(display_device "$serial")${RESET}"
