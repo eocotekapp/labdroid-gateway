@@ -4,11 +4,11 @@
 # LabDroid Gateway
 # Android Lab Edge Controller
 #
-# SAFETY / PRODUCT BOUNDARY:
+# PRODUCT BOUNDARY:
 # - Chỉ scan/connect TCP port 5555.
 # - Không có custom port.
 # - Không nhận port từ người dùng.
-# - Dành cho Android lab devices đã được chủ sở hữu bật ADB Wi-Fi.
+# - Dành cho Android lab devices đã bật ADB Wi-Fi.
 # ============================================================
 
 ADB_PORT=5555
@@ -22,7 +22,6 @@ NAME_FILE="$APP_DIR/names.txt"
 LAST_FILE="$APP_DIR/last_file.txt"
 UPLOAD_WEB_URL="https://thong-url-1.onrender.com"
 
-COMMON_THRESHOLD_PERCENT=60
 SCAN_CONCURRENCY=64
 ADB_CONCURRENCY=24
 VIDEO_SCAN_CONCURRENCY=12
@@ -132,7 +131,6 @@ normalize_serial() {
   fi
 
   ip_only="${s%%:*}"
-
   echo "$ip_only:$ADB_PORT"
 }
 
@@ -181,11 +179,6 @@ adb_connect_twice() {
 
   if [ -z "$serial" ]; then
     echo -e "${RED}Serial/IP trống.${RESET}"
-    return 1
-  fi
-
-  if ! echo "$serial" | grep -q ":$ADB_PORT$"; then
-    echo -e "${RED}BỎ QUA: chỉ cho phép port $ADB_PORT → $serial${RESET}"
     return 1
   fi
 
@@ -455,11 +448,9 @@ connect_saved_devices() {
   while read -r serial; do
     serial="$(normalize_serial "$serial")"
 
-    if echo "$serial" | grep -q ":$ADB_PORT$"; then
-      (
-        adb_connect_twice "$serial"
-      ) &
-    fi
+    (
+      adb_connect_twice "$serial"
+    ) &
 
     while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$ADB_CONCURRENCY" ]; do
       sleep 0.03
@@ -563,17 +554,17 @@ get_remote_videos() {
     sort -u
 }
 
-build_common_video_list() {
+build_all_video_list() {
   local vote_file="$TMP_DIR/video_votes.txt"
   local map_file="$TMP_DIR/video_map.txt"
-  local common_file="$TMP_DIR/common_videos.txt"
-  local raw_file="$TMP_DIR/common_raw.txt"
+  local list_file="$TMP_DIR/all_videos_list.txt"
+  local count_file="$TMP_DIR/all_video_count.txt"
   local device_file="$TMP_DIR/video_devices.txt"
 
   > "$vote_file"
   > "$map_file"
-  > "$common_file"
-  > "$raw_file"
+  > "$list_file"
+  > "$count_file"
   > "$device_file"
 
   adb_connected_devices > "$device_file"
@@ -587,12 +578,8 @@ build_common_video_list() {
   local count
   count="$(wc -l < "$device_file" | tr -d ' ')"
 
-  local required
-  required=$(( (count * COMMON_THRESHOLD_PERCENT + 99) / 100 ))
-
   echo >&2
-  echo -e "${YELLOW}Đang quét video trong /sdcard/Download trên $count thiết bị...${RESET}" >&2
-  echo -e "${YELLOW}Ngưỡng hiện tại:${RESET} $COMMON_THRESHOLD_PERCENT% = tối thiểu $required/$count thiết bị có cùng video" >&2
+  echo -e "${YELLOW}Đang quét toàn bộ video trong /sdcard/Download trên $count thiết bị...${RESET}" >&2
   echo >&2
 
   while read -r serial; do
@@ -627,38 +614,27 @@ build_common_video_list() {
     return 1
   fi
 
-  sort "$vote_file" | uniq -c | sort -nr > "$TMP_DIR/all_video_count.txt"
-  awk -v req="$required" '$1 >= req {print}' "$TMP_DIR/all_video_count.txt" > "$raw_file"
-
-  if [ ! -s "$raw_file" ]; then
-    echo >&2
-    echo -e "${RED}Không có video nào đạt ngưỡng $COMMON_THRESHOLD_PERCENT%.${RESET}" >&2
-    echo -e "${YELLOW}Danh sách video tìm thấy:${RESET}" >&2
-    nl -w2 -s") " "$TMP_DIR/all_video_count.txt" >&2
-    echo >&2
-    echo -e "${YELLOW}Gợi ý:${RESET} đổi COMMON_THRESHOLD_PERCENT=60 xuống 30 hoặc 40 nếu lab đang chưa đồng đều video." >&2
-    return 1
-  fi
-
-  awk '{$1=""; sub(/^ /,""); print}' "$raw_file" > "$common_file"
+  sort "$vote_file" | uniq -c | sort -nr > "$count_file"
+  awk '{$1=""; sub(/^ /,""); print}' "$count_file" > "$list_file"
 
   echo >&2
-  echo -e "${CYAN}Video đạt ngưỡng $COMMON_THRESHOLD_PERCENT%:${RESET}" >&2
+  echo -e "${CYAN}Danh sách video tìm thấy:${RESET}" >&2
   echo >&2
 
   local idx=1
+
   while read -r video; do
     [ -z "$video" ] && continue
     have_count="$(grep -Fx "$video" "$vote_file" | wc -l | tr -d ' ')"
-    echo "$idx) [$have_count/$count] $video" >&2
+    echo "$idx) [$have_count/$count máy có] $video" >&2
     idx=$((idx + 1))
-  done < "$common_file"
+  done < "$list_file"
 
   return 0
 }
 
-choose_common_video() {
-  build_common_video_list || return 1
+choose_video_from_lab() {
+  build_all_video_list || return 1
 
   echo >&2
   echo -e "${YELLOW}Cách chọn:${RESET} nhập số thứ tự video, ví dụ 1 hoặc 2" >&2
@@ -670,7 +646,7 @@ choose_common_video() {
   fi
 
   local video
-  video="$(sed -n "${n}p" "$TMP_DIR/common_videos.txt")"
+  video="$(sed -n "${n}p" "$TMP_DIR/all_videos_list.txt")"
 
   if [ -z "$video" ]; then
     echo -e "${RED}Không có video ở số thứ tự này.${RESET}" >&2
@@ -680,12 +656,19 @@ choose_common_video() {
   printf "%s\n" "$video"
 }
 
-feature_open_common_video() {
+find_source_device_from_map() {
+  local video="$1"
+  local map_file="$TMP_DIR/video_map.txt"
+
+  awk -F'|' -v v="$video" '$1 == v {print $2; exit}' "$map_file"
+}
+
+feature_open_lab_video() {
   banner
-  echo -e "${CYAN}Tìm video đạt ngưỡng và mở theo lựa chọn${RESET}"
+  echo -e "${CYAN}Liệt kê video trong lab rồi chọn mở${RESET}"
   line
 
-  video="$(choose_common_video)" || {
+  video="$(choose_video_from_lab)" || {
     pause
     return
   }
@@ -722,30 +705,12 @@ feature_open_common_video() {
   pause
 }
 
-device_has_video() {
-  local serial="$1"
-  local video="$2"
-
-  $ADB_BIN -s "$serial" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1
-}
-
-find_source_device_for_video() {
-  local video="$1"
-
-  adb_connected_devices | while read -r serial; do
-    if device_has_video "$serial" "$video"; then
-      echo "$serial"
-      break
-    fi
-  done
-}
-
-feature_sync_common_video() {
+feature_sync_lab_video() {
   banner
-  echo -e "${CYAN}Đồng bộ video đạt ngưỡng sang thiết bị đã chọn${RESET}"
+  echo -e "${CYAN}Liệt kê video trong lab rồi đồng bộ/push sang thiết bị đã chọn${RESET}"
   line
 
-  video="$(choose_common_video)" || {
+  video="$(choose_video_from_lab)" || {
     pause
     return
   }
@@ -753,10 +718,10 @@ feature_sync_common_video() {
   echo
   echo -e "${GREEN}Video đã chọn:${RESET} $video"
 
-  source_serial="$(find_source_device_for_video "$video")"
+  source_serial="$(find_source_device_from_map "$video")"
 
   if [ -z "$source_serial" ]; then
-    echo -e "${RED}Không tìm được máy nguồn có video này.${RESET}"
+    echo -e "${RED}Không tìm được máy nguồn trong dữ liệu đã quét.${RESET}"
     pause
     return
   fi
@@ -769,15 +734,25 @@ feature_sync_common_video() {
   if [ -f "$local_file" ]; then
     echo -e "${GREEN}Cache đã có:${RESET} $local_file"
   else
+    echo
     echo -e "${YELLOW}Đang pull video từ máy nguồn về cache...${RESET}"
+    echo -e "${YELLOW}Nguồn:${RESET} $source_serial:/sdcard/Download/$video"
+    echo -e "${YELLOW}Cache:${RESET} $local_file"
+    echo
+
     $ADB_BIN -s "$source_serial" pull "/sdcard/Download/$video" "$local_file"
 
     if [ $? -ne 0 ] || [ ! -f "$local_file" ]; then
       echo -e "${RED}Pull thất bại.${RESET}"
+      echo -e "${YELLOW}Thử kiểm tra thủ công:${RESET}"
+      echo "adb -s $source_serial shell ls -l /sdcard/Download"
       pause
       return
     fi
   fi
+
+  echo
+  echo -e "${CYAN}Bây giờ chọn thiết bị đích để push video sang.${RESET}"
 
   targets="$(select_devices)"
 
@@ -791,10 +766,10 @@ feature_sync_common_video() {
   read -rp "Bỏ qua máy đã có video này? [Y/n]: " skip_have
   [ -z "$skip_have" ] && skip_have="Y"
 
-  read -rp "Đồng bộ xong có phát luôn không? [y/N]: " play_now
+  read -rp "Push xong có phát luôn không? [y/N]: " play_now
 
   echo
-  echo -e "${YELLOW}Đang đồng bộ video...${RESET}"
+  echo -e "${YELLOW}Đang push video sang thiết bị đã chọn...${RESET}"
   echo
 
   echo "$targets" | while read -r serial; do
@@ -802,7 +777,7 @@ feature_sync_common_video() {
 
     (
       if echo "$skip_have" | grep -qi '^y'; then
-        if device_has_video "$serial" "$video"; then
+        if $ADB_BIN -s "$serial" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1; then
           echo -e "${CYAN}SKIP đã có → $(display_device "$serial")${RESET}"
           exit 0
         fi
@@ -876,12 +851,6 @@ names_manager() {
 
         if [ -z "$name" ] || [ -z "$serial" ]; then
           echo -e "${RED}Thiếu tên hoặc IP.${RESET}"
-          pause
-          continue
-        fi
-
-        if ! echo "$serial" | grep -q ":$ADB_PORT$"; then
-          echo -e "${RED}Chỉ cho phép lưu port $ADB_PORT.${RESET}"
           pause
           continue
         fi
@@ -1404,8 +1373,8 @@ main_menu() {
     echo -e "2)  🔗 ${GREEN}Connect IP thủ công port ${ADB_PORT}${RESET}"
     echo -e "3)  📋 ${YELLOW}Xem thiết bị Android lab đang connect${RESET}"
     echo -e "4)  📤 ${MAGENTA}Đẩy file/video lên thiết bị đã chọn${RESET}"
-    echo -e "5)  🎬 ${CYAN}Tìm video đạt ngưỡng và mở theo lựa chọn${RESET}"
-    echo -e "6)  🔄 ${GREEN}Đồng bộ video đạt ngưỡng sang thiết bị đã chọn${RESET}"
+    echo -e "5)  🎬 ${CYAN}Liệt kê video trong lab rồi chọn mở${RESET}"
+    echo -e "6)  🔄 ${GREEN}Liệt kê video trong lab rồi chọn đồng bộ/push${RESET}"
     echo -e "7)  🗂️  ${YELLOW}Quản lý tên máy / IP${RESET}"
     echo -e "8)  🌐 ${CYAN}Tải video direct URL vào cache rồi đẩy sang thiết bị${RESET}"
     echo -e "9)  🌍 ${BLUE}Mở web upload video lấy direct URL${RESET}"
@@ -1427,8 +1396,8 @@ main_menu() {
       2) connect_manual_5555 ;;
       3) list_adb_devices ;;
       4) batch_push_file ;;
-      5) feature_open_common_video ;;
-      6) feature_sync_common_video ;;
+      5) feature_open_lab_video ;;
+      6) feature_sync_lab_video ;;
       7) names_manager ;;
       8) download_url_to_cache ;;
       9) open_upload_web ;;
