@@ -30,13 +30,12 @@ ADB_CONCURRENCY=24
 VIDEO_SCAN_CONCURRENCY=12
 
 mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
-touch "$DEVICE_FILE" "$NAME_FILE"
+touch "$DEVICE_FILE" "$NAME_FILE" "$LAST_FILE"
 
 ESC=$'\033'
 RESET="${ESC}[0m"
 BOLD="${ESC}[1m"
 DIM="${ESC}[2m"
-BLINK="${ESC}[5m"
 
 RED="${ESC}[31m"
 GREEN="${ESC}[32m"
@@ -73,14 +72,6 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
-need_cmd_soft() {
-  if ! has_cmd "$1"; then
-    printf "%bThiếu lệnh:%b %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$1"
-    return 1
-  fi
-  return 0
-}
-
 detect_env() {
   if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -qi "com.termux"; then
     echo "termux"
@@ -93,6 +84,59 @@ detect_env() {
   else
     echo "unknown"
   fi
+}
+
+ui_ok() {
+  printf "%b%s%b\n" "$BRIGHT_GREEN$BOLD" "$1" "$RESET"
+}
+
+ui_warn() {
+  printf "%b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$1" "$RESET"
+}
+
+ui_err() {
+  printf "%b%s%b\n" "$BRIGHT_RED$BOLD" "$1" "$RESET"
+}
+
+ui_info() {
+  printf "%b%s%b\n" "$BRIGHT_CYAN$BOLD" "$1" "$RESET"
+}
+
+ui_dim() {
+  printf "%b%s%b\n" "$DIM$BRIGHT_WHITE" "$1" "$RESET"
+}
+
+rand_color() {
+  local idx=$((RANDOM % ${#COLORS[@]}))
+  printf "%b" "${COLORS[$idx]}"
+}
+
+ui_line() {
+  local color
+  color=$(rand_color)
+  printf "%b=======================================================%b\n" "$color$BOLD" "$RESET"
+}
+
+gradient_text() {
+  local text="$1"
+  local i char idx total
+  total=${#COLORS[@]}
+
+  for ((i=0; i<${#text}; i++)); do
+    char="${text:$i:1}"
+    idx=$((i % total))
+    printf "%b%s%b" "${COLORS[$idx]}$BOLD" "$char" "$RESET"
+  done
+}
+
+ui_title() {
+  clear
+  ui_line
+  printf "   "
+  gradient_text "LabDroid Gateway - Android Lab Edge Controller"
+  printf "\n"
+  printf "   %bADB Wi-Fi fixed port:%b %b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
+  ui_line
 }
 
 auto_install_missing() {
@@ -108,8 +152,7 @@ auto_install_missing() {
     return
   fi
 
-  clear
-  ui_line
+  ui_title
   ui_warn "Thiếu addon:$missing"
   ui_warn "Đang thử tự cài addon cần thiết..."
   echo ""
@@ -138,58 +181,6 @@ auto_install_missing() {
   esac
 }
 
-rand_color() {
-  local idx=$((RANDOM % ${#COLORS[@]}))
-  printf "%b" "${COLORS[$idx]}"
-}
-
-gradient_text() {
-  local text="$1"
-  local i char idx total
-  total=${#COLORS[@]}
-  for ((i=0; i<${#text}; i++)); do
-    char="${text:$i:1}"
-    idx=$((i % total))
-    printf "%b%s%b" "${COLORS[$idx]}$BOLD" "$char" "$RESET"
-  done
-}
-
-ui_line() {
-  local color
-  color=$(rand_color)
-  printf "%b=======================================================%b\n" "$color$BOLD" "$RESET"
-}
-
-ui_ok() {
-  printf "%b%s%b\n" "$BRIGHT_GREEN$BOLD" "$1" "$RESET"
-}
-
-ui_warn() {
-  printf "%b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$1" "$RESET"
-}
-
-ui_err() {
-  printf "%b%s%b\n" "$BRIGHT_RED$BOLD" "$1" "$RESET"
-}
-
-ui_info() {
-  printf "%b%s%b\n" "$BRIGHT_CYAN$BOLD" "$1" "$RESET"
-}
-
-ui_dim() {
-  printf "%b%s%b\n" "$DIM$BRIGHT_WHITE" "$1" "$RESET"
-}
-
-ui_title() {
-  clear
-  ui_line
-  printf "   "
-  gradient_text "LabDroid Gateway - Android Lab Edge Controller"
-  printf "\n"
-  printf "   %bADB Wi-Fi fixed port:%b %b%s%b\n" "$BRIGHT_YELLOW$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
-  ui_line
-}
-
 normalize_serial() {
   local s="$1"
   s="$(echo "$s" | tr -d ' ')"
@@ -211,6 +202,7 @@ get_name_by_ip() {
   local serial="$1"
   local name
   name=$(grep -F "|$serial" "$NAME_FILE" 2>/dev/null | head -n 1 | cut -d'|' -f1)
+
   if [ -n "$name" ]; then
     echo "$name"
   else
@@ -261,8 +253,10 @@ list_connected_devices_named() {
   fi
 
   i=1
+
   while IFS= read -r dev; do
     [ -z "$dev" ] && continue
+
     name=$(get_name_by_ip "$dev")
     brand="$($ADB_BIN -s "$dev" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
     model="$($ADB_BIN -s "$dev" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
@@ -313,10 +307,12 @@ EOF
   for dev in "${DEV_ARR[@]}"; do
     [ -z "$dev" ] && continue
     name=$(get_name_by_ip "$dev")
+
     printf "%b%s)%b %b%s%b %b(%s)%b\n" \
       "$BRIGHT_WHITE$BOLD" "$i" "$RESET" \
       "$BRIGHT_GREEN$BOLD" "$name" "$RESET" \
       "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
+
     i=$((i + 1))
   done
 
@@ -442,6 +438,11 @@ scan_and_connect_subnet() {
 }
 
 quick_scan_154_155() {
+  local subnet
+  local i
+  local ip
+  local serial
+
   ui_title
   ui_info "Scan nhanh 10.48.154.xxx + 10.48.155.xxx port $ADB_PORT"
   ui_line
@@ -501,7 +502,9 @@ connect_manual() {
 
   for ip in $ips; do
     serial="$(normalize_serial "$ip")"
+
     adb_connect_twice "$serial" &
+
     while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$ADB_CONCURRENCY" ]; do
       sleep 0.03
     done
@@ -547,6 +550,7 @@ connect_saved_devices() {
 adb_push_with_progress() {
   local serial="$1"
   local src="$2"
+
   adb -s "$serial" push "$src" /sdcard/Download/
 }
 
@@ -554,6 +558,7 @@ adb_pull_with_progress() {
   local serial="$1"
   local src="$2"
   local dst="$3"
+
   adb -s "$serial" pull "$src" "$dst"
 }
 
@@ -588,10 +593,10 @@ push_file_to_selected_devices() {
     adb_push_with_progress "$dev" "$src"
 
     if [ $? -eq 0 ]; then
-      ui_ok "   OK"
+      ui_ok "   PUSH OK"
       ok=$((ok + 1))
     else
-      ui_err "   FAIL"
+      ui_err "   PUSH FAIL"
       fail=$((fail + 1))
     fi
 
@@ -652,7 +657,7 @@ build_all_video_list() {
   local list_file="$TMP_DIR/all_videos_list.txt"
   local count_file="$TMP_DIR/all_video_count.txt"
   local device_file="$TMP_DIR/video_devices.txt"
-  local count
+  local total
   local serial
   local tmp_each
   local v
@@ -668,17 +673,20 @@ build_all_video_list() {
   list_connected_devices_raw > "$device_file"
 
   if [ ! -s "$device_file" ]; then
-    ui_err "Chưa có thiết bị ADB connected port $ADB_PORT."
+    ui_err "Chưa có thiết bị nào đang connect port $ADB_PORT."
+    ui_warn "Hãy scan/connect trước rồi thử lại."
     return 1
   fi
 
-  count="$(wc -l < "$device_file" | tr -d ' ')"
+  total="$(wc -l < "$device_file" | tr -d ' ')"
 
   echo ""
-  ui_info "Đang quét toàn bộ video trong /sdcard/Download trên $count thiết bị..."
+  ui_info "Đang quét TẤT CẢ video trong /sdcard/Download trên $total thiết bị..."
   echo ""
 
   while read -r serial; do
+    [ -z "$serial" ] && continue
+
     (
       tmp_each="$TMP_DIR/videos_${serial//[:.]/_}.txt"
 
@@ -720,17 +728,21 @@ build_all_video_list() {
 
   echo ""
   ui_line
-  ui_info "Danh sách video tìm thấy:"
+  ui_info "Danh sách TẤT CẢ video tìm thấy:"
   echo ""
 
   idx=1
+
   while read -r v; do
     [ -z "$v" ] && continue
+
     have_count="$(grep -Fx "$v" "$vote_file" | wc -l | tr -d ' ')"
+
     printf "%b%s)%b %b%s%b %b[%s/%s máy có]%b\n" \
       "$BRIGHT_WHITE$BOLD" "$idx" "$RESET" \
       "$BRIGHT_GREEN$BOLD" "$v" "$RESET" \
-      "$DIM$BRIGHT_WHITE" "$have_count" "$count" "$RESET"
+      "$DIM$BRIGHT_WHITE" "$have_count" "$total" "$RESET"
+
     idx=$((idx + 1))
   done < "$list_file"
 
@@ -744,6 +756,7 @@ choose_video_from_lab() {
   build_all_video_list || return 1
 
   echo ""
+  ui_dim "Cách chọn: nhập số thứ tự video, ví dụ 1 hoặc 2"
   printf "%bChọn video số:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
   read -r n
 
@@ -768,6 +781,7 @@ choose_video_from_lab() {
 find_source_device_from_map() {
   local video="$1"
   local map_file="$TMP_DIR/video_map.txt"
+
   awk -F'|' -v v="$video" '$1 == v {print $2; exit}' "$map_file"
 }
 
@@ -776,7 +790,7 @@ open_lab_video_menu() {
   local dev
 
   ui_title
-  ui_info "Liệt kê video trong lab rồi chọn mở"
+  ui_info "Liệt kê tất cả video trong lab rồi chọn mở"
   ui_line
 
   choose_video_from_lab || return
@@ -792,6 +806,8 @@ open_lab_video_menu() {
   echo ""
 
   for dev in "${SELECTED_DEVICES[@]}"; do
+    [ -z "$dev" ] && continue
+
     printf "%b→%b %b%s%b %b(%s)%b\n" \
       "$BRIGHT_WHITE$BOLD" "$RESET" \
       "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
@@ -803,9 +819,9 @@ open_lab_video_menu() {
       -t "video/*" >/dev/null 2>&1
 
     if [ $? -eq 0 ]; then
-      ui_ok "   OK"
+      ui_ok "   OPEN OK"
     else
-      ui_err "   FAIL"
+      ui_err "   OPEN FAIL"
     fi
 
     echo ""
@@ -819,9 +835,12 @@ sync_lab_video_menu() {
   local dev
   local skip_have
   local play_now
+  local ok=0
+  local fail=0
+  local skip=0
 
   ui_title
-  ui_info "Liệt kê video trong lab rồi chọn đồng bộ/push"
+  ui_info "Liệt kê tất cả video trong lab rồi chọn đồng bộ/push"
   ui_line
 
   choose_video_from_lab || return
@@ -839,6 +858,7 @@ sync_lab_video_menu() {
 
   ui_info "Máy nguồn: $(get_name_by_ip "$source_dev") ($source_dev)"
 
+  mkdir -p "$CACHE_DIR"
   local_file="$CACHE_DIR/$video"
 
   if [ -f "$local_file" ]; then
@@ -872,14 +892,12 @@ sync_lab_video_menu() {
 
   echo ""
   ui_info "Đang push video sang thiết bị đã chọn..."
-  ui_dim "Kiểu push: adb -s SERIAL push FILE /sdcard/Download/"
+  ui_dim "Dùng kiểu push ổn định: adb -s SERIAL push FILE /sdcard/Download/"
   echo ""
 
-  ok=0
-  fail=0
-  skip=0
-
   for dev in "${SELECTED_DEVICES[@]}"; do
+    [ -z "$dev" ] && continue
+
     printf "%b→%b %b%s%b %b(%s)%b\n" \
       "$BRIGHT_WHITE$BOLD" "$RESET" \
       "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
@@ -985,42 +1003,7 @@ download_url_to_cache_and_push() {
   ls -lh "$local_file" 2>/dev/null
   echo ""
 
-  choose_devices || return
-
-  printf "%bPush xong có phát luôn không? [y/N]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
-  read -r play_now
-
-  echo ""
-  ui_info "Đang push video đã tải sang thiết bị đã chọn..."
-  echo ""
-
-  for dev in "${SELECTED_DEVICES[@]}"; do
-    printf "%b→%b %b%s%b %b(%s)%b\n" \
-      "$BRIGHT_WHITE$BOLD" "$RESET" \
-      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
-      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
-
-    adb_push_with_progress "$dev" "$local_file"
-
-    if [ $? -eq 0 ]; then
-      ui_ok "   PUSH OK"
-      ok=$((ok + 1))
-
-      if echo "$play_now" | grep -qi '^y'; then
-        adb -s "$dev" shell am start \
-          -a android.intent.action.VIEW \
-          -d "file:///sdcard/Download/$(basename "$local_file")" \
-          -t "video/*" >/dev/null 2>&1
-      fi
-    else
-      ui_err "   PUSH FAIL"
-      fail=$((fail + 1))
-    fi
-
-    echo ""
-  done
-
-  ui_info "Kết quả: OK=$ok | FAIL=$fail"
+  push_file_to_selected_devices "$local_file" "$(basename "$local_file")"
 }
 
 open_upload_web() {
@@ -1112,7 +1095,9 @@ batch_open_app() {
 
   for dev in "${SELECTED_DEVICES[@]}"; do
     printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+
     adb -s "$dev" shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+
     [ $? -eq 0 ] && ui_ok "   OK" || ui_err "   FAIL"
     echo ""
   done
@@ -1135,7 +1120,9 @@ batch_open_url() {
 
   for dev in "${SELECTED_DEVICES[@]}"; do
     printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+
     adb -s "$dev" shell am start -a android.intent.action.VIEW -d "$url" >/dev/null 2>&1
+
     [ $? -eq 0 ] && ui_ok "   OK" || ui_err "   FAIL"
     echo ""
   done
@@ -1161,7 +1148,9 @@ install_apk_selected() {
 
   for dev in "${SELECTED_DEVICES[@]}"; do
     printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+
     adb -s "$dev" install -r "$apk"
+
     [ $? -eq 0 ] && ui_ok "   INSTALL OK" || ui_err "   INSTALL FAIL"
     echo ""
   done
@@ -1214,6 +1203,7 @@ names_manager() {
 
         printf "%bNhập tên máy:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
         read -r name
+
         printf "%bNhập IP thiết bị:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
         read -r ip
 
@@ -1246,6 +1236,7 @@ names_manager() {
 
         echo "$devices" | while read -r dev; do
           old_name="$(get_name_by_ip "$dev")"
+
           if grep -q "|$dev$" "$NAME_FILE"; then
             ui_dim "Đã có: $old_name | $dev"
             continue
@@ -1257,6 +1248,7 @@ names_manager() {
           echo ""
           ui_info "Thiết bị: $dev"
           echo "Model: $brand $model"
+
           printf "%bĐặt tên, bỏ trống để skip:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
           read -r name
 
@@ -1272,6 +1264,7 @@ names_manager() {
 
       4)
         ui_title
+
         if [ ! -s "$NAME_FILE" ]; then
           ui_warn "Danh sách trống."
           pause_enter
@@ -1280,6 +1273,7 @@ names_manager() {
 
         nl -w2 -s") " "$NAME_FILE"
         echo ""
+
         printf "%bNhập số thứ tự muốn xoá:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
         read -r n
 
@@ -1296,6 +1290,7 @@ names_manager() {
 
       5)
         touch "$NAME_FILE"
+
         if has_cmd nano; then
           nano "$NAME_FILE"
         elif has_cmd vi; then
@@ -1317,8 +1312,7 @@ cache_manager() {
   local c
   local n
   local file
-  local play_now
-  local dev
+  local ok
 
   while true; do
     ui_title
@@ -1353,6 +1347,7 @@ cache_manager() {
 
         nl -w2 -s") " "$TMP_DIR/cache_files.txt"
         echo ""
+
         printf "%bChọn số thứ tự file:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
         read -r n
 
@@ -1371,10 +1366,12 @@ cache_manager() {
       3)
         printf "%bGõ YES để xoá toàn bộ cache:%b " "$BRIGHT_RED$BOLD" "$RESET"
         read -r ok
+
         if [ "$ok" = "YES" ]; then
           rm -f "$CACHE_DIR"/*
           ui_ok "Đã xoá cache."
         fi
+
         pause_enter
         ;;
 
@@ -1405,6 +1402,7 @@ dashboard_summary() {
 
 reboot_selected() {
   local dev
+  local ok
 
   ui_title
   ui_err "Reboot thiết bị đã chọn"
@@ -1420,7 +1418,9 @@ reboot_selected() {
 
   for dev in "${SELECTED_DEVICES[@]}"; do
     printf "%b→%b %s\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$(get_name_by_ip "$dev")"
+
     adb -s "$dev" reboot >/dev/null 2>&1
+
     [ $? -eq 0 ] && ui_ok "   REBOOT SENT" || ui_err "   FAIL"
     echo ""
   done
@@ -1435,8 +1435,8 @@ main_menu() {
     printf "%b2)%b  %bConnect IP thủ công port %s%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$ADB_PORT" "$RESET"
     printf "%b3)%b  %bXem thiết bị Android lab đang connect%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
     printf "%b4)%b  %bPush file/video lên thiết bị đã chọn%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_MAGENTA$BOLD" "$RESET"
-    printf "%b5)%b  %bLiệt kê video trong lab rồi chọn mở%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
-    printf "%b6)%b  %bLiệt kê video trong lab rồi chọn đồng bộ/push%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$RESET"
+    printf "%b5)%b  %bLiệt kê TẤT CẢ video trong lab rồi chọn mở%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
+    printf "%b6)%b  %bLiệt kê TẤT CẢ video rồi chọn đồng bộ/push%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_GREEN$BOLD" "$RESET"
     printf "%b7)%b  %bQuản lý tên máy / IP%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_YELLOW$BOLD" "$RESET"
     printf "%b8)%b  %bTải video direct URL vào cache rồi push%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_CYAN$BOLD" "$RESET"
     printf "%b9)%b  %bMở web upload video lấy direct URL%b\n" "$BRIGHT_WHITE$BOLD" "$RESET" "$BRIGHT_BLUE$BOLD" "$RESET"
