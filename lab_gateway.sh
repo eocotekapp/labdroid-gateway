@@ -37,14 +37,6 @@ RESET="${ESC}[0m"
 BOLD="${ESC}[1m"
 DIM="${ESC}[2m"
 
-RED="${ESC}[31m"
-GREEN="${ESC}[32m"
-YELLOW="${ESC}[33m"
-BLUE="${ESC}[34m"
-MAGENTA="${ESC}[35m"
-CYAN="${ESC}[36m"
-WHITE="${ESC}[37m"
-
 BRIGHT_RED="${ESC}[91m"
 BRIGHT_GREEN="${ESC}[92m"
 BRIGHT_YELLOW="${ESC}[93m"
@@ -70,20 +62,6 @@ pause_enter() {
 
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
-}
-
-detect_env() {
-  if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -qi "com.termux"; then
-    echo "termux"
-  elif [ -f /etc/alpine-release ]; then
-    echo "alpine"
-  elif has_cmd apt; then
-    echo "debian"
-  elif has_cmd apk; then
-    echo "alpine"
-  else
-    echo "unknown"
-  fi
 }
 
 ui_ok() {
@@ -139,8 +117,23 @@ ui_title() {
   ui_line
 }
 
+detect_env() {
+  if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -qi "com.termux"; then
+    echo "termux"
+  elif [ -f /etc/alpine-release ]; then
+    echo "alpine"
+  elif has_cmd apt; then
+    echo "debian"
+  elif has_cmd apk; then
+    echo "alpine"
+  else
+    echo "unknown"
+  fi
+}
+
 auto_install_missing() {
   local missing=""
+  local env_type
 
   for c in bash adb timeout awk grep sed sort wc seq curl; do
     if ! has_cmd "$c"; then
@@ -183,6 +176,8 @@ auto_install_missing() {
 
 normalize_serial() {
   local s="$1"
+  local ip_only
+
   s="$(echo "$s" | tr -d ' ')"
 
   if [ -z "$s" ]; then
@@ -213,6 +208,7 @@ get_name_by_ip() {
 
 save_device() {
   local serial="$1"
+
   serial="$(normalize_serial "$serial")"
   [ -z "$serial" ] && return
 
@@ -243,7 +239,9 @@ clear_video_scan_cache() {
         "$TMP_DIR"/all_videos_list.txt \
         "$TMP_DIR"/all_video_count.txt \
         "$TMP_DIR"/video_devices.txt \
-        "$TMP_DIR"/videos_*.txt 2>/dev/null
+        "$TMP_DIR"/videos_*.txt \
+        "$TMP_DIR"/vote_*.txt \
+        "$TMP_DIR"/map_*.txt 2>/dev/null
 }
 
 verify_video_on_device() {
@@ -372,8 +370,8 @@ EOF
 
 adb_connect_twice() {
   local serial="$1"
-  serial="$(normalize_serial "$serial")"
 
+  serial="$(normalize_serial "$serial")"
   [ -z "$serial" ] && return 1
 
   $ADB_BIN connect "$serial" >/dev/null 2>&1
@@ -687,7 +685,10 @@ build_all_video_list() {
   local device_file="$TMP_DIR/video_devices.txt"
   local total
   local serial
+  local safe
   local tmp_each
+  local tmp_vote
+  local tmp_map
   local v
   local idx
   local have_count
@@ -718,15 +719,22 @@ build_all_video_list() {
     [ -z "$serial" ] && continue
 
     (
-      tmp_each="$TMP_DIR/videos_${serial//[:.]/_}.txt"
+      safe="${serial//[:.]/_}"
+      tmp_each="$TMP_DIR/videos_${safe}.txt"
+      tmp_vote="$TMP_DIR/vote_${safe}.txt"
+      tmp_map="$TMP_DIR/map_${safe}.txt"
+
+      : > "$tmp_each"
+      : > "$tmp_vote"
+      : > "$tmp_map"
 
       list_videos_on_device "$serial" > "$tmp_each"
 
       if [ -s "$tmp_each" ]; then
         while read -r v; do
           [ -z "$v" ] && continue
-          echo "$v" >> "$vote_file"
-          echo "$v|$serial" >> "$map_file"
+          echo "$v" >> "$tmp_vote"
+          echo "$v|$serial" >> "$tmp_map"
         done < "$tmp_each"
 
         printf "%bDONE%b → %s | %s video\n" \
@@ -746,6 +754,9 @@ build_all_video_list() {
   done < "$device_file"
 
   wait
+
+  cat "$TMP_DIR"/vote_*.txt 2>/dev/null > "$vote_file"
+  cat "$TMP_DIR"/map_*.txt 2>/dev/null > "$map_file"
 
   if [ ! -s "$vote_file" ]; then
     echo ""
