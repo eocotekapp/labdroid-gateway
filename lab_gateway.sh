@@ -201,6 +201,7 @@ safe_filename() {
 get_name_by_ip() {
   local serial="$1"
   local name
+
   name=$(grep -F "|$serial" "$NAME_FILE" 2>/dev/null | head -n 1 | cut -d'|' -f1)
 
   if [ -n "$name" ]; then
@@ -234,6 +235,22 @@ connected_count() {
 check_adb_port_5555() {
   local ip="$1"
   timeout 1 bash -c "echo >/dev/tcp/$ip/$ADB_PORT" >/dev/null 2>&1
+}
+
+clear_video_scan_cache() {
+  rm -f "$TMP_DIR"/video_votes.txt \
+        "$TMP_DIR"/video_map.txt \
+        "$TMP_DIR"/all_videos_list.txt \
+        "$TMP_DIR"/all_video_count.txt \
+        "$TMP_DIR"/video_devices.txt \
+        "$TMP_DIR"/videos_*.txt 2>/dev/null
+}
+
+verify_video_on_device() {
+  local dev="$1"
+  local video="$2"
+
+  adb -s "$dev" shell "ls -l '/sdcard/Download/$video'" >/dev/null 2>&1
 }
 
 list_connected_devices_named() {
@@ -593,8 +610,16 @@ push_file_to_selected_devices() {
     adb_push_with_progress "$dev" "$src"
 
     if [ $? -eq 0 ]; then
-      ui_ok "   PUSH OK"
-      ok=$((ok + 1))
+      sleep 0.2
+      adb -s "$dev" shell sync >/dev/null 2>&1 || true
+
+      if verify_video_on_device "$dev" "$name"; then
+        ui_ok "   PUSH OK + VERIFY OK"
+        ok=$((ok + 1))
+      else
+        ui_warn "   PUSH OK nhưng VERIFY chưa thấy file"
+        ok=$((ok + 1))
+      fi
     else
       ui_err "   PUSH FAIL"
       fail=$((fail + 1))
@@ -603,7 +628,10 @@ push_file_to_selected_devices() {
     echo ""
   done
 
+  clear_video_scan_cache
+
   ui_info "Kết quả push: OK=$ok | FAIL=$fail"
+  ui_ok "Đã xoá cache danh sách video. Vào mục 5/6 sẽ quét lại số mới."
 }
 
 push_local_file_menu() {
@@ -664,6 +692,8 @@ build_all_video_list() {
   local idx
   local have_count
 
+  clear_video_scan_cache
+
   : > "$vote_file"
   : > "$map_file"
   : > "$list_file"
@@ -681,7 +711,7 @@ build_all_video_list() {
   total="$(wc -l < "$device_file" | tr -d ' ')"
 
   echo ""
-  ui_info "Đang quét TẤT CẢ video trong /sdcard/Download trên $total thiết bị..."
+  ui_info "Đang quét TƯƠI toàn bộ video trong /sdcard/Download trên $total thiết bị..."
   echo ""
 
   while read -r serial; do
@@ -904,7 +934,7 @@ sync_lab_video_menu() {
       "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
 
     if echo "$skip_have" | grep -qi '^y'; then
-      if adb -s "$dev" shell "ls '/sdcard/Download/$video'" >/dev/null 2>&1; then
+      if verify_video_on_device "$dev" "$video"; then
         ui_warn "   SKIP đã có"
         skip=$((skip + 1))
         echo ""
@@ -915,7 +945,15 @@ sync_lab_video_menu() {
     adb_push_with_progress "$dev" "$local_file"
 
     if [ $? -eq 0 ]; then
-      ui_ok "   PUSH OK"
+      sleep 0.2
+      adb -s "$dev" shell sync >/dev/null 2>&1 || true
+
+      if verify_video_on_device "$dev" "$video"; then
+        ui_ok "   PUSH OK + VERIFY OK"
+      else
+        ui_warn "   PUSH OK nhưng VERIFY chưa thấy file"
+      fi
+
       ok=$((ok + 1))
 
       if echo "$play_now" | grep -qi '^y'; then
@@ -938,7 +976,10 @@ sync_lab_video_menu() {
     echo ""
   done
 
+  clear_video_scan_cache
+
   ui_info "Kết quả: PUSH_OK=$ok | FAIL=$fail | SKIP=$skip"
+  ui_ok "Đã xoá cache danh sách video. Vào mục 5 sẽ thấy số mới."
 }
 
 download_url_to_cache_and_push() {
@@ -946,10 +987,6 @@ download_url_to_cache_and_push() {
   local default_name
   local new_name
   local local_file
-  local play_now
-  local dev
-  local ok=0
-  local fail=0
 
   ui_title
   ui_info "Tải video từ URL direct vào cache rồi push"
@@ -1001,7 +1038,6 @@ download_url_to_cache_and_push() {
   echo ""
   ui_ok "Tải xong: $local_file"
   ls -lh "$local_file" 2>/dev/null
-  echo ""
 
   push_file_to_selected_devices "$local_file" "$(basename "$local_file")"
 }
@@ -1369,6 +1405,7 @@ cache_manager() {
 
         if [ "$ok" = "YES" ]; then
           rm -f "$CACHE_DIR"/*
+          clear_video_scan_cache
           ui_ok "Đã xoá cache."
         fi
 
