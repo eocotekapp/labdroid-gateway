@@ -28,6 +28,7 @@ UPLOAD_WEB_URL="https://thong-url-1.onrender.com"
 SCAN_CONCURRENCY=64
 ADB_CONCURRENCY=24
 VIDEO_SCAN_CONCURRENCY=12
+VIDEO_DIRS="/sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures"
 
 mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
 touch "$DEVICE_FILE" "$NAME_FILE" "$LAST_FILE"
@@ -190,7 +191,10 @@ normalize_serial() {
 }
 
 safe_filename() {
-  echo "$1" | sed 's#[/\\:*?"<>|]#_#g'
+  local name="$1"
+  name="$(printf "%s" "$name" | tr -cd 'A-Za-z0-9._-')"
+  [ -z "$name" ] && name="video_$(date +%Y%m%d_%H%M%S).mp4"
+  echo "$name"
 }
 
 get_name_by_ip() {
@@ -248,7 +252,12 @@ verify_video_on_device() {
   local dev="$1"
   local video="$2"
 
-  adb -s "$dev" shell "ls -l '/sdcard/Download/$video'" >/dev/null 2>&1
+  $ADB_BIN -s "$dev" shell "
+    for d in /sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures; do
+      [ -f \"\$d/$video\" ] && exit 0
+    done
+    exit 1
+  " >/dev/null 2>&1
 }
 
 list_connected_devices_named() {
@@ -566,7 +575,9 @@ adb_push_with_progress() {
   local serial="$1"
   local src="$2"
 
-  adb -s "$serial" push "$src" /sdcard/Download/
+  local dst_dir="${3:-/sdcard/Download}"
+  adb -s "$serial" shell "mkdir -p '$dst_dir'" >/dev/null 2>&1
+  adb -s "$serial" push "$src" "$dst_dir/"
 }
 
 adb_pull_with_progress() {
@@ -671,10 +682,13 @@ push_local_file_menu() {
 list_videos_on_device() {
   local dev="$1"
 
-  adb -s "$dev" shell "ls -1 /sdcard/Download 2>/dev/null" \
-    | tr -d '\r' \
-    | grep -Ei '\.(mp4|mkv|avi|mov|m4v|3gp|webm)$' \
-    | sort -u
+  $ADB_BIN -s "$dev" shell '
+    for d in /sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures; do
+      [ -d "$d" ] || continue
+      find "$d" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.m4v" -o -iname "*.3gp" -o -iname "*.webm" \) 2>/dev/null
+    done
+  ' | tr -d '
+' | sed '/^[[:space:]]*$/d' | sort -u
 }
 
 build_all_video_list() {
