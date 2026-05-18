@@ -24,11 +24,14 @@ DEVICE_FILE="$APP_DIR/devices.txt"
 NAME_FILE="$APP_DIR/names.txt"
 LAST_FILE="$APP_DIR/last_file.txt"
 UPLOAD_WEB_URL="https://thong-url-1.onrender.com"
+VIDEO_EXT_REGEX="\.(mp4|mkv|avi|mov|m4v|3gp|webm)$"
 
 SCAN_CONCURRENCY=64
 ADB_CONCURRENCY=24
-VIDEO_SCAN_CONCURRENCY=12
-VIDEO_DIRS="/sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures /storage/emulated/0/DCIM /storage/emulated/0/DCIM/Camera /storage/emulated/0/Movies /storage/emulated/0/Pictures"
+VIDEO_SCAN_CONCURRENCY=48
+PUSH_CONCURRENCY=10
+OPEN_CONCURRENCY=80
+VIDEO_DIRS="/sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures"
 
 mkdir -p "$APP_DIR" "$CACHE_DIR" "$TMP_DIR"
 touch "$DEVICE_FILE" "$NAME_FILE" "$LAST_FILE"
@@ -192,27 +195,9 @@ normalize_serial() {
 
 safe_filename() {
   local name="$1"
-  local ext=""
-
-  name="$(basename "$name")"
-  ext="${name##*.}"
   name="$(printf "%s" "$name" | tr -cd 'A-Za-z0-9._-')"
-
   [ -z "$name" ] && name="video_$(date +%Y%m%d_%H%M%S).mp4"
-
-  if ! echo "$name" | grep -Eiq '\.(mp4|mov|mkv|avi|m4v|3gp|webm)$'; then
-    if echo "$ext" | grep -Eiq '^(mp4|mov|mkv|avi|m4v|3gp|webm)$'; then
-      name="${name}.${ext}"
-    else
-      name="${name}.mp4"
-    fi
-  fi
-
   echo "$name"
-}
-
-shell_quote() {
-  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\''/g")"
 }
 
 get_name_by_ip() {
@@ -269,41 +254,13 @@ clear_video_scan_cache() {
 verify_video_on_device() {
   local dev="$1"
   local video="$2"
-  local qvideo
-
-  qvideo="$(shell_quote "$video")"
 
   $ADB_BIN -s "$dev" shell "
-    for d in $VIDEO_DIRS; do
+    for d in /sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures; do
       [ -f \"\$d/$video\" ] && exit 0
     done
-    found=\$(find /sdcard /storage/emulated/0 -type f -name $qvideo 2>/dev/null | head -n 1)
-    [ -n \"\$found\" ] && exit 0
     exit 1
   " >/dev/null 2>&1
-}
-
-verify_video_path_on_device() {
-  local dev="$1"
-  local path="$2"
-  local qpath
-  qpath="$(shell_quote "$path")"
-  $ADB_BIN -s "$dev" shell "[ -f $qpath ]" >/dev/null 2>&1
-}
-
-find_video_path_on_device() {
-  local dev="$1"
-  local video="$2"
-  local qvideo
-  qvideo="$(shell_quote "$video")"
-
-  $ADB_BIN -s "$dev" shell "
-    for d in $VIDEO_DIRS; do
-      [ -f \"\$d/$video\" ] && { echo \"\$d/$video\"; exit 0; }
-    done
-    find /sdcard /storage/emulated/0 -type f -name $qvideo 2>/dev/null | head -n 1
-  " 2>/dev/null | tr -d '
-' | sed -n '1p'
 }
 
 list_connected_devices_named() {
@@ -637,10 +594,10 @@ adb_pull_with_progress() {
 push_file_to_selected_devices() {
   local src="$1"
   local name="$2"
+  local dst_dir="${3:-/sdcard/Download}"
   local dev
-  local devname
-  local ok=0
-  local fail=0
+  local ok_file="$TMP_DIR/push_ok.txt"
+  local fail_file="$TMP_DIR/push_fail.txt"
 
   if [ ! -f "$src" ]; then
     ui_err "Không thấy file: $src"
@@ -649,45 +606,49 @@ push_file_to_selected_devices() {
 
   choose_devices || return 1
 
+  : > "$ok_file"
+  : > "$fail_file"
+
   echo ""
-  ui_info "Đang push: $name"
-  ui_dim "Kiểu push mặc định: adb -s SERIAL push FILE /sdcard/Download/"
+  ui_info "Đang push SONG SONG: $name"
+  ui_dim "Đích: $dst_dir"
+  ui_dim "Concurrency push: $PUSH_CONCURRENCY"
   echo ""
 
   for dev in "${SELECTED_DEVICES[@]}"; do
-    devname=$(get_name_by_ip "$dev")
-
-    printf "%b→%b %b%s%b %b(%s)%b\n" \
-      "$BRIGHT_WHITE$BOLD" "$RESET" \
-      "$BRIGHT_GREEN$BOLD" "$devname" "$RESET" \
-      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
-
-    adb_push_with_progress "$dev" "$src"
-
-    if [ $? -eq 0 ]; then
-      sleep 0.2
-      adb -s "$dev" shell sync >/dev/null 2>&1 || true
-
-      if verify_video_on_device "$dev" "$name"; then
-        ui_ok "   PUSH OK + VERIFY OK"
-        ok=$((ok + 1))
+    [ -z "$dev" ] && continue
+    (
+      adb_push_with_progress "$dev" "$src" "$dst_dir" >/dev/null 2>&1
+      if [ $? -eq 0 ]; then
+        adb -s "$dev" shell sync >/dev/null 2>&1 || true
+        if adb -s "$dev" shell "[ -f '$dst_dir/$name' ]" >/dev/null 2>&1; then
+          printf "%s|%s\n" "$dev" "$(get_name_by_ip "$dev")" >> "$ok_file"
+        else
+          printf "%s|%s|VERIFY_FAIL\n" "$dev" "$(get_name_by_ip "$dev")" >> "$fail_file"
+        fi
       else
-        ui_warn "   PUSH OK nhưng VERIFY chưa thấy file"
-        ok=$((ok + 1))
+        printf "%s|%s|PUSH_FAIL\n" "$dev" "$(get_name_by_ip "$dev")" >> "$fail_file"
       fi
-    else
-      ui_err "   PUSH FAIL"
-      fail=$((fail + 1))
-    fi
+    ) &
 
-    echo ""
+    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
+      sleep 0.02
+    done
   done
+
+  wait
 
   clear_video_scan_cache
 
-  ui_info "Kết quả push: OK=$ok | FAIL=$fail"
+  ui_info "Kết quả push: OK=$(wc -l < "$ok_file" | tr -d ' ') | FAIL=$(wc -l < "$fail_file" | tr -d ' ')"
+  if [ -s "$fail_file" ]; then
+    cat "$fail_file" | while IFS='|' read -r d n reason; do
+      printf "%bFAIL%b %s (%s) | %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$n" "$d" "$reason"
+    done
+  fi
   ui_ok "Đã xoá cache danh sách video. Vào mục 5/6 sẽ quét lại số mới."
 }
+
 
 push_local_file_menu() {
   local last
@@ -728,45 +689,34 @@ push_local_file_menu() {
 list_videos_on_device() {
   local dev="$1"
 
+  # FAST multi-method scan:
+  # 1) MediaStore query: usually fastest for Android gallery/video files.
+  # 2) find in common video folders.
+  # 3) fallback find /sdcard with timeout so it cannot hang too long.
   $ADB_BIN -s "$dev" shell '
-    exts="*.mp4 *.mov *.mkv *.avi *.m4v *.3gp *.webm"
+    scan_dirs="/sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures /sdcard/Recordings"
 
-    scan_find_dir() {
-      dir="$1"
-      [ -d "$dir" ] || return 0
-      find "$dir" -type f \( \
-        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o \
-        -iname "*.avi" -o -iname "*.m4v" -o -iname "*.3gp" -o \
-        -iname "*.webm" \
-      \) 2>/dev/null
-    }
-
-    # Cách 1: quét nhanh các thư mục media phổ biến
-    for d in /sdcard/Download /storage/emulated/0/Download \
-             /sdcard/DCIM /sdcard/DCIM/Camera \
-             /sdcard/Movies /sdcard/Pictures \
-             /storage/emulated/0/DCIM /storage/emulated/0/DCIM/Camera \
-             /storage/emulated/0/Movies /storage/emulated/0/Pictures; do
-      scan_find_dir "$d"
-    done
-
-    # Cách 2: quét rộng toàn bộ bộ nhớ chung nếu cách 1 không đủ
-    scan_find_dir /sdcard
-    scan_find_dir /storage/emulated/0
-
-    # Cách 3: lấy từ MediaStore nếu Android đã index video
+    # Method 1: MediaStore / content provider
     if command -v content >/dev/null 2>&1; then
       content query --uri content://media/external/video/media --projection _data 2>/dev/null \
         | sed -n "s/.*_data=//p" \
-        | grep -Ei "\.(mp4|mov|mkv|avi|m4v|3gp|webm)$" || true
+        | sed "s/,.*$//" \
+        | grep -Ei "\.(mp4|mkv|avi|mov|m4v|3gp|webm)$"
     fi
-  ' | tr -d '
-' \
-    | sed '/^[[:space:]]*$/d' \
-    | grep -Ei '^/' \
-    | grep -Ei '\.(mp4|mov|mkv|avi|m4v|3gp|webm)$' \
-    | sort -u
+
+    # Method 2: find common shared folders
+    for d in $scan_dirs; do
+      [ -d "$d" ] || continue
+      find "$d" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.m4v" -o -iname "*.3gp" -o -iname "*.webm" \) 2>/dev/null
+    done
+
+    # Method 3: fallback wider scan, timeout if available
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 3 find /sdcard -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.m4v" -o -iname "*.3gp" -o -iname "*.webm" \) 2>/dev/null
+    fi
+  ' | tr -d '\r' | sed '/^[[:space:]]*$/d' | sort -u
 }
+
 
 build_all_video_list() {
   local vote_file="$TMP_DIR/video_votes.txt"
@@ -781,6 +731,7 @@ build_all_video_list() {
   local tmp_vote
   local tmp_map
   local v
+  local base
   local idx
   local have_count
 
@@ -803,7 +754,8 @@ build_all_video_list() {
   total="$(wc -l < "$device_file" | tr -d ' ')"
 
   echo ""
-  ui_info "Đang quét TƯƠI video bằng adb shell: Download + DCIM + Movies + Pictures + MediaStore trên $total thiết bị..."
+  ui_info "Đang quét SONG SONG video bằng MediaStore + shell find trên $total thiết bị..."
+  ui_dim "Concurrency scan: $VIDEO_SCAN_CONCURRENCY"
   echo ""
 
   while read -r serial; do
@@ -825,7 +777,6 @@ build_all_video_list() {
         while read -r v; do
           [ -z "$v" ] && continue
           base="$(basename "$v")"
-          [ -z "$base" ] && continue
           echo "$base" >> "$tmp_vote"
           echo "$base|$serial|$v" >> "$tmp_map"
         done < "$tmp_each"
@@ -842,7 +793,7 @@ build_all_video_list() {
     ) &
 
     while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$VIDEO_SCAN_CONCURRENCY" ]; do
-      sleep 0.05
+      sleep 0.02
     done
   done < "$device_file"
 
@@ -853,7 +804,7 @@ build_all_video_list() {
 
   if [ ! -s "$vote_file" ]; then
     echo ""
-    ui_err "Không tìm thấy video nào trong Download/DCIM/Movies/Pictures/MediaStore."
+    ui_err "Không tìm thấy video nào trên thiết bị."
     return 1
   fi
 
@@ -882,6 +833,7 @@ build_all_video_list() {
 
   return 0
 }
+
 
 choose_video_from_lab() {
   local n
@@ -919,12 +871,86 @@ find_source_device_from_map() {
   awk -F'|' -v v="$video" '$1 == v {print $2 "|" $3; exit}' "$map_file"
 }
 
+
+open_video_parallel() {
+  local video="$1"
+  local path_hint="$2"
+  local dev
+  local ok_file="$TMP_DIR/open_ok.txt"
+  local fail_file="$TMP_DIR/open_fail.txt"
+  local path_file
+  local target_path
+  local name
+
+  : > "$ok_file"
+  : > "$fail_file"
+
+  echo ""
+  ui_info "Đang gửi lệnh OPEN ĐỒNG LOẠT..."
+  ui_dim "Concurrency mở: $OPEN_CONCURRENCY"
+  echo ""
+
+  for dev in "${SELECTED_DEVICES[@]}"; do
+    [ -z "$dev" ] && continue
+    (
+      name="$(get_name_by_ip "$dev")"
+      target_path=""
+
+      # Ưu tiên path đã sync/push.
+      if [ -n "$path_hint" ]; then
+        if $ADB_BIN -s "$dev" shell "[ -f '$path_hint' ]" >/dev/null 2>&1; then
+          target_path="$path_hint"
+        fi
+      fi
+
+      # Nếu path hint không có, tìm nhanh theo tên file ở các thư mục phổ biến.
+      if [ -z "$target_path" ]; then
+        target_path="$($ADB_BIN -s "$dev" shell "
+          for d in /sdcard/Download /storage/emulated/0/Download /sdcard/DCIM /sdcard/DCIM/Camera /sdcard/Movies /sdcard/Pictures /sdcard/Recordings; do
+            [ -f \"\$d/$video\" ] && echo \"\$d/$video\" && exit 0
+          done
+          exit 1
+        " 2>/dev/null | tr -d '\r' | head -n1)"
+      fi
+
+      if [ -z "$target_path" ]; then
+        printf "%s|%s|NOT_FOUND\n" "$dev" "$name" >> "$fail_file"
+        exit 1
+      fi
+
+      $ADB_BIN -s "$dev" shell am start \
+        -a android.intent.action.VIEW \
+        -d "file://$target_path" \
+        -t "video/*" >/dev/null 2>&1
+
+      if [ $? -eq 0 ]; then
+        printf "%s|%s|%s\n" "$dev" "$name" "$target_path" >> "$ok_file"
+      else
+        printf "%s|%s|%s\n" "$dev" "$name" "$target_path" >> "$fail_file"
+      fi
+    ) &
+
+    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$OPEN_CONCURRENCY" ]; do
+      sleep 0.01
+    done
+  done
+
+  wait
+
+  echo ""
+  ui_ok "OPEN OK: $(wc -l < "$ok_file" | tr -d ' ')"
+  if [ -s "$fail_file" ]; then
+    ui_err "OPEN FAIL: $(wc -l < "$fail_file" | tr -d ' ')"
+    cat "$fail_file" | while IFS='|' read -r d n p; do
+      printf "%bFAIL%b %s (%s) | %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$n" "$d" "$p"
+    done
+  fi
+}
+
 open_lab_video_menu() {
   local video
-  local dev
-  local video_path
-  local ok=0
-  local fail=0
+  local source_info
+  local source_path
 
   ui_title
   ui_info "Liệt kê tất cả video trong lab rồi chọn mở"
@@ -936,50 +962,15 @@ open_lab_video_menu() {
   echo ""
   ui_ok "Video đã chọn: $video"
 
+  source_info="$(find_source_device_from_map "$video")"
+  source_path="${source_info#*|}"
+  [ "$source_path" = "$source_info" ] && source_path="/sdcard/Download/$video"
+
   choose_devices || return
 
-  echo ""
-  ui_info "Đang tìm path thật và mở video trên thiết bị đã chọn..."
-  echo ""
-
-  for dev in "${SELECTED_DEVICES[@]}"; do
-    [ -z "$dev" ] && continue
-
-    printf "%b→%b %b%s%b %b(%s)%b
-" \
-      "$BRIGHT_WHITE$BOLD" "$RESET" \
-      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
-      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
-
-    video_path="$(find_video_path_on_device "$dev" "$video")"
-
-    if [ -z "$video_path" ]; then
-      ui_err "   Không thấy video trên máy này"
-      fail=$((fail + 1))
-      echo ""
-      continue
-    fi
-
-    ui_dim "   Path: $video_path"
-
-    adb -s "$dev" shell am start \
-      -a android.intent.action.VIEW \
-      -d "file://$video_path" \
-      -t "video/*" >/dev/null 2>&1
-
-    if [ $? -eq 0 ]; then
-      ui_ok "   OPEN OK"
-      ok=$((ok + 1))
-    else
-      ui_err "   OPEN FAIL"
-      fail=$((fail + 1))
-    fi
-
-    echo ""
-  done
-
-  ui_info "Kết quả mở: OK=$ok | FAIL=$fail"
+  open_video_parallel "$video" "$source_path"
 }
+
 
 sync_lab_video_menu() {
   local video
@@ -991,9 +982,9 @@ sync_lab_video_menu() {
   local dev
   local skip_have
   local play_now
-  local ok=0
-  local fail=0
-  local skip=0
+  local ok_file="$TMP_DIR/sync_push_ok.txt"
+  local fail_file="$TMP_DIR/sync_push_fail.txt"
+  local skip_file="$TMP_DIR/sync_push_skip.txt"
 
   ui_title
   ui_info "Liệt kê tất cả video trong lab rồi chọn đồng bộ/push"
@@ -1008,19 +999,19 @@ sync_lab_video_menu() {
   source_info="$(find_source_device_from_map "$video")"
   source_dev="${source_info%%|*}"
   source_path="${source_info#*|}"
-  source_dir="$(dirname "$source_path")"
 
-  if [ -z "$source_info" ] || [ -z "$source_dev" ] || [ -z "$source_path" ] || [ "$source_dev" = "$source_path" ]; then
+  if [ -z "$source_dev" ] || [ "$source_path" = "$source_info" ]; then
     ui_err "Không tìm được máy nguồn/path nguồn trong dữ liệu đã quét."
     return
   fi
 
+  source_dir="$(dirname "$source_path")"
   ui_info "Máy nguồn: $(get_name_by_ip "$source_dev") ($source_dev)"
   ui_dim "Path nguồn: $source_path"
-  ui_dim "Thư mục sẽ push sang máy đích: $source_dir"
+  ui_dim "Thư mục push đồng bộ: $source_dir"
 
   mkdir -p "$CACHE_DIR"
-  local_file="$CACHE_DIR/$(safe_filename "$video")"
+  local_file="$CACHE_DIR/$video"
 
   if [ -f "$local_file" ]; then
     ui_warn "Dùng file cache: $local_file"
@@ -1044,77 +1035,72 @@ sync_lab_video_menu() {
   choose_devices || return
 
   echo ""
-  printf "%bBỏ qua máy đã có video đúng path này? [Y/n]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  printf "%bBỏ qua máy đã có video này? [Y/n]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
   read -r skip_have
   [ -z "$skip_have" ] && skip_have="Y"
 
-  printf "%bPush xong có phát luôn không? [y/N]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
+  printf "%bPush xong có phát ĐỒNG LOẠT không? [y/N]:%b " "$BRIGHT_YELLOW$BOLD" "$RESET"
   read -r play_now
 
+  : > "$ok_file"
+  : > "$fail_file"
+  : > "$skip_file"
+
   echo ""
-  ui_info "Đang push video sang thiết bị đã chọn..."
-  ui_dim "Đích push: $source_dir/$(basename "$local_file")"
+  ui_info "Đang push SONG SONG sang thiết bị đã chọn..."
+  ui_dim "Đích: $source_dir"
+  ui_dim "Concurrency push: $PUSH_CONCURRENCY"
   echo ""
 
   for dev in "${SELECTED_DEVICES[@]}"; do
     [ -z "$dev" ] && continue
-
-    printf "%b→%b %b%s%b %b(%s)%b
-" \
-      "$BRIGHT_WHITE$BOLD" "$RESET" \
-      "$BRIGHT_GREEN$BOLD" "$(get_name_by_ip "$dev")" "$RESET" \
-      "$DIM$BRIGHT_WHITE" "$dev" "$RESET"
-
-    if echo "$skip_have" | grep -qi '^y'; then
-      if verify_video_path_on_device "$dev" "$source_dir/$(basename "$local_file")" || verify_video_path_on_device "$dev" "$source_dir/$video"; then
-        ui_warn "   SKIP đã có đúng thư mục"
-        skip=$((skip + 1))
-        echo ""
-        continue
-      fi
-    fi
-
-    adb_push_with_progress "$dev" "$local_file" "$source_dir"
-
-    if [ $? -eq 0 ]; then
-      sleep 0.2
-      adb -s "$dev" shell sync >/dev/null 2>&1 || true
-
-      pushed_path="$source_dir/$(basename "$local_file")"
-
-      if verify_video_path_on_device "$dev" "$pushed_path"; then
-        ui_ok "   PUSH OK + VERIFY OK"
-      else
-        ui_warn "   PUSH OK nhưng VERIFY chưa thấy đúng path"
-      fi
-
-      ok=$((ok + 1))
-
-      if echo "$play_now" | grep -qi '^y'; then
-        adb -s "$dev" shell am start \
-          -a android.intent.action.VIEW \
-          -d "file://$pushed_path" \
-          -t "video/*" >/dev/null 2>&1
-
-        if [ $? -eq 0 ]; then
-          ui_ok "   PLAY OK"
-        else
-          ui_err "   PLAY FAIL"
+    (
+      if echo "$skip_have" | grep -qi '^y'; then
+        if adb -s "$dev" shell "[ -f '$source_dir/$video' ]" >/dev/null 2>&1; then
+          printf "%s|%s\n" "$dev" "$(get_name_by_ip "$dev")" >> "$skip_file"
+          exit 0
         fi
       fi
-    else
-      ui_err "   PUSH FAIL"
-      fail=$((fail + 1))
-    fi
 
-    echo ""
+      adb_push_with_progress "$dev" "$local_file" "$source_dir" >/dev/null 2>&1
+      if [ $? -eq 0 ]; then
+        adb -s "$dev" shell sync >/dev/null 2>&1 || true
+        if adb -s "$dev" shell "[ -f '$source_dir/$video' ]" >/dev/null 2>&1; then
+          printf "%s|%s\n" "$dev" "$(get_name_by_ip "$dev")" >> "$ok_file"
+        else
+          printf "%s|%s|VERIFY_FAIL\n" "$dev" "$(get_name_by_ip "$dev")" >> "$fail_file"
+        fi
+      else
+        printf "%s|%s|PUSH_FAIL\n" "$dev" "$(get_name_by_ip "$dev")" >> "$fail_file"
+      fi
+    ) &
+
+    while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$PUSH_CONCURRENCY" ]; do
+      sleep 0.02
+    done
   done
+
+  wait
 
   clear_video_scan_cache
 
-  ui_info "Kết quả: PUSH_OK=$ok | FAIL=$fail | SKIP=$skip"
-  ui_ok "Đã xoá cache danh sách video. Vào mục 5/6 sẽ quét lại số mới."
+  ui_info "Kết quả: PUSH_OK=$(wc -l < "$ok_file" | tr -d ' ') | SKIP=$(wc -l < "$skip_file" | tr -d ' ') | FAIL=$(wc -l < "$fail_file" | tr -d ' ')"
+  if [ -s "$fail_file" ]; then
+    cat "$fail_file" | while IFS='|' read -r d n reason; do
+      printf "%bFAIL%b %s (%s) | %s\n" "$BRIGHT_RED$BOLD" "$RESET" "$n" "$d" "$reason"
+    done
+  fi
+
+  if echo "$play_now" | grep -qi '^y'; then
+    # Phát đồng loạt sau khi toàn bộ push/skip xong, không phát từng máy ngay khi push xong.
+    echo ""
+    ui_info "Push đã xong. Bắt đầu phát ĐỒNG LOẠT..."
+    open_video_parallel "$video" "$source_dir/$video"
+  fi
+
+  ui_ok "Đã xoá cache danh sách video. Vào mục 5 sẽ thấy số mới."
 }
+
 
 download_url_to_cache_and_push() {
   local url
